@@ -64,14 +64,33 @@ function mkEl(id) {
   };
 }
 
-/* 在独立 VM 沙箱里加载 public.js。fetchMode 决定快照获取行为。 */
-function boot(snapshotObj, fetchMode) {
+/* 把「当前时刻」钉死的 Date 替身：`Date.now()` 与 `new Date()` 都返回 fixedMs。
+   时间帧类缺陷（如把北京墙上时间当真实 epoch 解读）只在特定钟点显形，
+   用真实 now 会随执行时刻漂移——冻结时钟才能稳定复现与回归。 */
+function fakeDate(fixedMs) {
+  const Real = Date;
+  function FD() {
+    var a = Array.prototype.slice.call(arguments);
+    if (!(this instanceof FD)) return new Real(fixedMs).toString();
+    if (a.length === 0) return new Real(fixedMs);
+    return new (Function.prototype.bind.apply(Real, [null].concat(a)))();
+  }
+  FD.now = function () { return fixedMs; };
+  FD.parse = Real.parse;
+  FD.UTC = Real.UTC;
+  FD.prototype = Real.prototype;
+  return FD;
+}
+
+/* 在独立 VM 沙箱里加载 public.js。fetchMode 决定快照获取行为；
+   nowMs 非空时冻结时钟（用于时间帧断言）。 */
+function boot(snapshotObj, fetchMode, nowMs) {
   const els = {};
   const winHandlers = {};
   const ctx = {
     console: console,
     setTimeout: setTimeout, clearTimeout: clearTimeout,
-    Date: Date, Math: Math, JSON: JSON, isFinite: isFinite, isNaN: isNaN,
+    Date: nowMs == null ? Date : fakeDate(nowMs), Math: Math, JSON: JSON, isFinite: isFinite, isNaN: isNaN,
     encodeURIComponent: encodeURIComponent, decodeURIComponent: decodeURIComponent,
     localStorage: { getItem: function () { return null; }, setItem: function () {} },
     fetch: async function () {
@@ -149,6 +168,25 @@ const wait = function (ms) { return new Promise(function (r) { setTimeout(r, ms)
     /01-02 03:04/.test(SNAP_XD.els['#freshText']._text), SNAP_XD.els['#freshText']._text);
   check('跨天快照判为已过期',
     SNAP_XD.els['#freshBadge']._attrs['data-fresh'] === 'expired', SNAP_XD.els['#freshBadge']._attrs['data-fresh']);
+
+  /* ===== 时间帧自检（冻结时钟） =====
+     历史缺陷：`shortStamp` 曾用 `parseUtc8Ts` 的结果再 `toISOString()`，
+     等于把「北京墙上时间」当成真实 epoch 解读，整体前移 8 小时——
+     凡 16:00 之后的**当天**数据都被标成「明天」（如 11-24 17:06 显示成 11-25 17:06）。
+     用真实 now 会随执行时刻漂移，故冻结到 2026-11-24 17:30（北京时间）。 */
+  const FIXED_NOW = Date.UTC(2026, 10, 24, 9, 30, 0);   // = 2026-11-24 17:30 北京时间
+  const NEAR = JSON.parse(JSON.stringify(snapshot));
+  NEAR.meta.dataAsOf = '2026-11-24 17:06:22';           // 当天，约 24 分钟前
+  const SNAP_NEAR = boot(NEAR, 'ok', FIXED_NOW);
+  await wait(60);
+  check('当天 17:06 数据 → 页头只显示 HH:MM，不串到次日',
+    /数据更新 17:06$/.test(SNAP_NEAR.els['#freshText']._text), SNAP_NEAR.els['#freshText']._text);
+  check('当天 17:06 数据 → 判为 fresh（既非过期也非「晚于当前时刻」）',
+    SNAP_NEAR.els['#freshBadge']._attrs['data-fresh'] === 'fresh', SNAP_NEAR.els['#freshBadge']._attrs['data-fresh']);
+  check('当天 17:06 数据 → 新鲜度标注「约 24 分钟前」',
+    SNAP_NEAR.els['#freshBadge']._attrs['title'].indexOf('约 24 分钟前') >= 0, SNAP_NEAR.els['#freshBadge']._attrs['title']);
+  check('新鲜度提示不得出现「晚于当前时刻」',
+    SNAP_NEAR.els['#freshBadge']._attrs['title'].indexOf('晚于当前时刻') < 0, SNAP_NEAR.els['#freshBadge']._attrs['title']);
 
   /* 无数据时间时不得编造一个时间戳。 */
   const NO_TS = JSON.parse(JSON.stringify(snapshot));
