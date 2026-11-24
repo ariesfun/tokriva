@@ -830,61 +830,15 @@ def rankings(scene: str = Query("speed", pattern="^(speed|agent|stable|longterm)
 
     历史上前端、本接口、hub/rank.py 各有一套打分，权重与过滤条件不一致，
     会出现「页面看到的榜」和「下发用的榜」不同。这里改为单一来源。
+    对外结构的组装已抽到 `hub.rank.board`，公开导出（public_snapshot）复用同一函数。
     """
     from . import rank as ranker
 
-    # stable 是旧接口的命名，语义等同 longterm（额度与有效期权重更高）
-    scene_key = "longterm" if scene == "stable" else scene
-    results = ranker.build(_conn(), scene_key, persist=False)
-
-    # 上下文长度：排名按模型粒度，补上 context 便于前端做紧凑表格
-    ctx = {r["model_id"]: r["context_length"] for r in _conn().execute(
-        "SELECT model_id, context_length FROM model "
-        "WHERE context_length IS NOT NULL")}
-
-    items, excluded = [], []
-    for r in results:
-        d = r.get("detail") or {}
-        if not r["eligible"]:
-            excluded.append({"endpoint": r["endpoint"],
-                             "model": r.get("display_name") or r["model_id"],
-                             "modelId": r["model_id"], "reason": r["reason"]})
-            continue
-        parts = d.get("parts", {})
-        items.append({
-            "endpoint": r["endpoint"],
-            "model": r.get("display_name") or r["model_id"],
-            "modelId": r["model_id"],
-            "contextLength": ctx.get(r["model_id"]),
-            "n": d.get("n", 0),
-            "totalProbes": r.get("total_probes"),
-            "score": r["score"],
-            "ttftP50": d.get("p50_ttft"),
-            "tpsP50": d.get("p50_tps"),
-            "totalP50": d.get("p50_total"),
-            "totalP95": d.get("p95_total"),
-            "breakdown": {
-                "latency": round((parts.get("ttft") or 0) * 100),
-                "throughput": round((parts.get("tps") or 0) * 100),
-                "stability": round((parts.get("stability") or 0) * 100),
-                "availability": round((parts.get("availability") or 0) * 100),
-                "quota": round((parts.get("quota") or 0) * 100),
-            },
-            "weightsUsed": d.get("weights_used", {}),
-            "missing": d.get("missing", []),
-        })
-
-    return {
-        "scene": scene_key,
-        "sceneLabel": {"agent": "Agent / Coding 榜", "speed": "速度榜",
-                       "longterm": "长期榜"}.get(scene_key, scene_key),
-        "weights": ranker.SCENES.get(scene_key, {}),
-        "minSamples": ranker.MIN_SAMPLES,
-        "items": items,
-        "excluded": excluded,
-        "note": ("由 hub/rank.py 统一计算：硬过滤样本数/新鲜度/状态/额度，"
-                 "缺失分项按剩余权重重新分配，429 不计入可用率分母。"),
-    }
+    conn = _conn()
+    try:
+        return ranker.board(conn, scene)
+    finally:
+        conn.close()
 
 
 def _probe_round_id(conn) -> str:

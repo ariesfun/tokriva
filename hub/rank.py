@@ -263,6 +263,68 @@ def build(conn, scene: str = "agent", persist: bool = True) -> list[dict]:
     return results
 
 
+SCENE_LABEL = {"agent": "Agent / Coding 榜", "speed": "速度榜", "longterm": "长期榜"}
+
+
+def board(conn, scene: str = "speed") -> dict:
+    """组装某场景榜单的**对外结构**（只读，不写库、不落 rank_snapshot）。
+
+    单一来源：`hub/api.py::rankings` 与公开导出（`hub/public_snapshot.py`）
+    都调用这里，避免"页面看到的榜"和"公开站的榜"各算一套口径。
+    `scene='stable'` 是旧命名，语义等同 `longterm`。
+    """
+    scene_key = "longterm" if scene == "stable" else scene
+    results = build(conn, scene_key, persist=False)
+
+    # 上下文长度：排名按模型粒度，补上 context 便于前端做紧凑表格
+    ctx = {r["model_id"]: r["context_length"] for r in conn.execute(
+        "SELECT model_id, context_length FROM model "
+        "WHERE context_length IS NOT NULL")}
+
+    items, excluded = [], []
+    for r in results:
+        d = r.get("detail") or {}
+        if not r["eligible"]:
+            excluded.append({"endpoint": r["endpoint"],
+                             "model": r.get("display_name") or r["model_id"],
+                             "modelId": r["model_id"], "reason": r["reason"]})
+            continue
+        parts = d.get("parts", {})
+        items.append({
+            "endpoint": r["endpoint"],
+            "model": r.get("display_name") or r["model_id"],
+            "modelId": r["model_id"],
+            "contextLength": ctx.get(r["model_id"]),
+            "n": d.get("n", 0),
+            "totalProbes": r.get("total_probes"),
+            "score": r["score"],
+            "ttftP50": d.get("p50_ttft"),
+            "tpsP50": d.get("p50_tps"),
+            "totalP50": d.get("p50_total"),
+            "totalP95": d.get("p95_total"),
+            "breakdown": {
+                "latency": round((parts.get("ttft") or 0) * 100),
+                "throughput": round((parts.get("tps") or 0) * 100),
+                "stability": round((parts.get("stability") or 0) * 100),
+                "availability": round((parts.get("availability") or 0) * 100),
+                "quota": round((parts.get("quota") or 0) * 100),
+            },
+            "weightsUsed": d.get("weights_used", {}),
+            "missing": d.get("missing", []),
+        })
+
+    return {
+        "scene": scene_key,
+        "sceneLabel": SCENE_LABEL.get(scene_key, scene_key),
+        "weights": SCENES.get(scene_key, {}),
+        "minSamples": MIN_SAMPLES,
+        "items": items,
+        "excluded": excluded,
+        "note": ("由 hub/rank.py 统一计算：硬过滤样本数/新鲜度/状态/额度，"
+                 "缺失分项按剩余权重重新分配，429 不计入可用率分母。"),
+    }
+
+
 def print_board(results: list[dict], scene: str) -> None:
     print(f"=== 榜单：{scene} ===")
     print(f"{'#':>2s} {'endpoint':13s} {'model':30s} {'得分':>6s} {'nttft':>7s} "

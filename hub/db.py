@@ -218,6 +218,23 @@ def connect(db_path: str | Path) -> sqlite3.Connection:
     return conn
 
 
+def connect_ro(db_path: str | Path) -> sqlite3.Connection:
+    """只读打开：不建表、不迁移、不写。用于公开导出等纯读取场景。
+
+    优先走 `mode=ro` URI；WAL 库在个别平台只读打不开时（需要 -shm 写权限）
+    退回普通连接——此时也只是读，且库已是最新 schema，迁移为空操作。
+    调用方负责 `close()`。
+    """
+    p = Path(db_path)
+    try:
+        conn = sqlite3.connect(f"file:{p.as_posix()}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+        conn.execute("SELECT COUNT(*) FROM sqlite_master").fetchone()
+        return conn
+    except sqlite3.Error:
+        return connect(p)
+
+
 def seed_endpoints(conn: sqlite3.Connection, endpoints: list[dict]) -> None:
     """幂等写入 provider + endpoint。"""
     for ep in endpoints:
