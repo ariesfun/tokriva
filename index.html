@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="color-scheme" content="light dark" />
+  <meta name="description" content="Tokriva 公开榜单 · 免费 AI 接口的周期性探测结果（只读）" />
+  <meta name="robots" content="index, follow" />
+  <title>Tokriva · 公开榜单</title>
+  <script>
+    /* 主题引导：在样式表生效前落定 data-theme，避免深色偏好下闪白 */
+    (function () {
+      try {
+        var t = localStorage.getItem('tokriva-pub-theme');
+        if (!t) t = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        document.documentElement.setAttribute('data-theme', t);
+      } catch (e) { /* 忽略：隐私模式下 localStorage 不可用 */ }
+    })();
+  </script>
+  <link rel="stylesheet" href="public.css" />
+</head>
+<body>
+  <!-- ============ 图标精灵（仅公开页用到的一小撮） ============ -->
+  <svg class="icon-sprite" aria-hidden="true" width="0" height="0" style="position:absolute">
+    <symbol id="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4M12 17h.01"/></symbol>
+    <symbol id="i-external" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></symbol>
+  </svg>
+
+  <header class="pub-top">
+    <div class="wrap pub-top-inner">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 32 32" fill="none"><path d="M3 17h6l3-9 5 18 4-11 3 4h5" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </span>
+        <span class="brand-text">
+          <strong>Tokriva</strong>
+          <small>公开榜单 · 只读</small>
+        </span>
+      </div>
+      <div class="top-right">
+        <span class="fresh" id="freshBadge" data-fresh="unknown" title="数据新鲜度">
+          <span class="dot"></span><span id="freshText">加载中…</span>
+        </span>
+        <button class="icon-btn" id="themeBtn" aria-label="切换深浅主题" title="切换深浅主题">
+          <svg class="ico-sun"><use href="#i-sun"/></svg>
+          <svg class="ico-moon"><use href="#i-moon"/></svg>
+        </button>
+      </div>
+    </div>
+    <nav class="pub-nav wrap" id="nav" aria-label="公开视图导航"></nav>
+  </header>
+
+  <main>
+    <div class="wrap" id="view" tabindex="-1"></div>
+  </main>
+
+  <footer class="wrap pub-foot">
+    <p class="disclaimer" id="disclaimer"></p>
+    <div class="foot-meta" id="footMeta"></div>
+  </footer>
+
+  <script>window.TOKRIVA_PUBLIC_BUILD = true;</script>
+  <script src="public.js"></script>
+</body>
+</html>
