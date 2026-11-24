@@ -87,13 +87,17 @@ def _synthetic() -> dict[str, dict]:
             "chunks": [[0, "<!DOCTYPE html><html><head><title>Attention Required!"
                            "</title></head><body>Cloudflare</body></html>"]],
         },
+        # 分片延迟是**累计**毫秒，且客户端按「每次 recv」打时间戳：同一次读取里的
+        # 多个分片会共用同一个时刻（见 probe.py 的 now 变量）。若相邻两片间隔 0ms，
+        # 快速机器（如 CI）上会被合并进同一次 recv，正文事件只剩 2 个不同时刻，
+        # stream_mode 便会误判成 buffered。故三片严格等距 400ms，确保各自落在独立读取里。
         "slow_stream": {
             "status": 200,
             "headers": {"Content-Type": "text/event-stream"},
             "chunks": [
                 [0, 'data: {"choices":[{"delta":{"content":"a"},"finish_reason":null}]}\n\n'],
                 [400, 'data: {"choices":[{"delta":{"content":"b"},"finish_reason":null}]}\n\n'],
-                [400, 'data: {"choices":[{"delta":{"content":"c"},"finish_reason":"stop"}]}\n\n'],
+                [800, 'data: {"choices":[{"delta":{"content":"c"},"finish_reason":"stop"}]}\n\n'],
             ],
         },
         "reasoning_starved": {
