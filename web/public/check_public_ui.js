@@ -126,6 +126,38 @@ const wait = function (ms) { return new Promise(function (r) { setTimeout(r, ms)
 
   check('加载完成：#view 有渲染内容', A.view().length > 50, A.view().length);
   check('新鲜度徽标已落定', ['fresh', 'stale', 'expired', 'unknown'].indexOf(A.els['#freshBadge']._attrs['data-fresh']) >= 0, A.els['#freshBadge']._attrs['data-fresh']);
+
+  /* ===== 页头必须给出「数据更新到什么时候」 =====
+     只给「正常/过期」这种状态词不够：访客无从判断该不该信这份数据。
+     时间戳还必须按**北京时间**解读，因为库里的时间戳就是北京时间墙上时间，
+     海外访客的本机时钟与北京相差数小时——按本机算会把「刚更新过」显示成「已过期」。 */
+  const freshText = A.els['#freshText']._text;
+  check('页头显示数据更新时间（HH:MM）', /\d{2}:\d{2}/.test(freshText), freshText);
+  check('页头时间戳取自 meta.dataAsOf',
+    freshText.indexOf(String(snapshot.meta.dataAsOf).slice(11, 16)) >= 0,
+    freshText + ' ← ' + snapshot.meta.dataAsOf);
+  check('新鲜度提示标注北京时间口径',
+    A.els['#freshBadge']._attrs['title'].indexOf('北京时间') >= 0,
+    A.els['#freshBadge']._attrs['title']);
+
+  /* 跨天快照要补出月日，否则「03:04」会被误读成今天凌晨。 */
+  const XD = JSON.parse(JSON.stringify(snapshot));
+  XD.meta.dataAsOf = '2026-01-02 03:04:05';
+  const SNAP_XD = boot(XD, 'ok');
+  await wait(60);
+  check('跨天快照的时间戳补月日',
+    /01-02 03:04/.test(SNAP_XD.els['#freshText']._text), SNAP_XD.els['#freshText']._text);
+  check('跨天快照判为已过期',
+    SNAP_XD.els['#freshBadge']._attrs['data-fresh'] === 'expired', SNAP_XD.els['#freshBadge']._attrs['data-fresh']);
+
+  /* 无数据时间时不得编造一个时间戳。 */
+  const NO_TS = JSON.parse(JSON.stringify(snapshot));
+  NO_TS.meta.dataAsOf = null;
+  const SNAP_NO_TS = boot(NO_TS, 'ok');
+  await wait(60);
+  check('缺数据时间 → 只显示「暂无数据时间」',
+    SNAP_NO_TS.els['#freshText']._text === '暂无数据时间', SNAP_NO_TS.els['#freshText']._text);
+
   check('页脚免责声明非空', A.els['#disclaimer']._text.length > 30);
   check('页脚含快照标识', A.els['#footMeta']._html.indexOf(snapshot.meta.snapshotId) >= 0);
   check('导航只含 5 个公开视图', (A.els['#nav']._html.match(/data-nav=/g) || []).length === 5, (A.els['#nav']._html.match(/data-nav=/g) || []).length);
