@@ -39,10 +39,12 @@ class CycleTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         root = Path(self.tmp.name)
 
-        # 重定向：数据库与下发目录都放临时区
-        self._saved = (run.DB_PATH, run.ENDPOINTS, export.OUT_DIR)
+        # 重定向：数据库、下发目录与 .env 都放临时区，不依赖仓库根目录的 .env
+        self._saved = (run.DB_PATH, run.ENDPOINTS, export.OUT_DIR, run.ENV_PATH)
         run.DB_PATH = root / "cycle.db"
         export.OUT_DIR = root / "litellm"
+        run.ENV_PATH = root / ".env"
+        run.ENV_PATH.write_text("FAKE_CYCLE_KEY=sk-fake-cycle\n", encoding="utf-8")
         run.ENDPOINTS = [{
             "provider": "FakeVendor", "website": "http://127.0.0.1",
             "kind": "model_api", "label": "Fake-EP",
@@ -54,7 +56,7 @@ class CycleTest(unittest.TestCase):
         }]
 
     def tearDown(self):
-        run.DB_PATH, run.ENDPOINTS, export.OUT_DIR = self._saved
+        run.DB_PATH, run.ENDPOINTS, export.OUT_DIR, run.ENV_PATH = self._saved
         self.tmp.cleanup()
         os.environ.pop("FAKE_CYCLE_KEY", None)
 

@@ -1,6 +1,6 @@
 """FastAPI 服务：把 hub.db 的探测数据以只读 HTTP 接口暴露给前端展示页。
 
-设计原则（对齐 docs/free-ai-api-hub-design.md）：
+设计原则：
 - 只读为主：所有 GET 接口不写库；触发探测 / 下发预览是显式动作。
 - Key 永不回显：只暴露 auth_env 变量名，不读取、不返回任何凭证。
 - 错误体脱敏：probe_result.error_body 已由 classify.redact 处理，这里再兜底截断。
