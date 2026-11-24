@@ -87,6 +87,37 @@ _OPS_FINAL_ALIAS = {"NO_KEY": "NOT_MONITORED", "AUTH_FAILED": "NOT_MONITORED"}
 #: 推荐理由里禁止出现的凭据措辞（`recommendation.missing`）
 _OPS_REASON_REPLACE = {"缺少密钥": NOT_MONITORED_LABEL, "鉴权失败": NOT_MONITORED_LABEL}
 
+#: `final` → 访客口径计数分档。**未列出的结论一律落到「异常」**，绝不静默丢弃。
+#:
+#: 为什么要在公开层**重新聚合**、而不是直接用 `status_engine` 的 `counts`：
+#: 上游那个字典是**有损**的——它只认 6 个已知词
+#: （`elif final.lower() in counts`），于是 `RESPONSE_INVALID` / `ENDPOINT_ERROR` /
+#: `NETWORK_ERROR` / `REASONING_STARVED` / `WAF_BLOCKED` / `MODEL_GONE` /
+#: `QUOTA_EXHAUSTED` 等等**全被丢掉**。实测线上就出现「宣称共观测 5 个接口，
+#: 却只说得出 4 个，且唯一的异常接口被整个吞掉」。
+#: 公开文案必须与访客真正看到的表格**同源**，否则两者迟早对不上——所以从矩阵行聚合。
+#:
+#: 表里同时收录**改写前**的凭据态内名（`NO_KEY` / `AUTH_FAILED` / `NOT_CONFIGURED`），
+#: 是为了让本函数**自给自足**：调用方漏做状态名改写时，凭据态不会反被误报成「异常」——
+#: 那正是「虚报全线告急」的另一种错法。大小写不敏感。
+_FINAL_BUCKET = {
+    "OK": "ok",
+    "LIMITED": "limited",
+    "NOT_MONITORED": "not_monitored",
+    "NO_KEY": "not_monitored",
+    "AUTH_FAILED": "not_monitored",
+    "NOT_CONFIGURED": "not_monitored",
+    "PENDING": "pending",
+    "DISABLED": "disabled",
+}
+#: 认不出的结论（含空值）落到哪一档。取「异常」而非「正常」：宁可多报，
+#: 不可把一个没见过的故障态说成正常——那是公开页最容易得罪人的错法。
+_BUCKET_FALLBACK = "issues"
+
+#: 公开计数键（也是**完整划分**）。不变式：各项之和 == `len(matrix)`。
+PUBLIC_COUNT_KEYS = ("ok", "limited", "issues", "pending", "disabled",
+                     "not_monitored", "unknown")
+
 #: 矩阵各层**允许公开**的字段——正向白名单，未列出的字段一律删除。
 #:
 #: 为什么不整个放开：layer 里混着三类只对操作者有意义的字段，
@@ -434,6 +465,26 @@ def _catalog(conn) -> dict:
     return {"items": [{k: r.get(k) for k in keep} for r in rows]}
 
 
+def _bucket_counts(rows: list) -> dict:
+    """从矩阵行聚合访客口径计数——**单一数据源 = 访客真正看到的那张表**。
+
+    与 `status_engine` 的 `counts` 的关键区别：这里是**完整划分**，
+    任何认不出的 `final` 都会落到 `_BUCKET_FALLBACK`，不会凭空消失。
+    于是「各项之和 == 行数」这条不变式恒成立，文案与表格不可能互相矛盾。
+    """
+    c = {k: 0 for k in PUBLIC_COUNT_KEYS}
+    for row in rows:
+        if not isinstance(row, dict):
+            c["unknown"] += 1
+            continue
+        raw = str(row.get("final") or "").strip().upper()
+        if not raw:
+            c["unknown"] += 1
+            continue
+        c[_FINAL_BUCKET.get(raw, _BUCKET_FALLBACK)] += 1
+    return c
+
+
 def _public_summary(counts: dict, n_rows: int) -> str:
     """访客口径的一句话结论。
 
@@ -441,22 +492,23 @@ def _public_summary(counts: dict, n_rows: int) -> str:
     而且「缺少密钥」泄露的正是 `matrix[].hasKey` 被剥掉要保护的信息（本机凭据配置）。
     公开稿只谈「本轮观测到什么」，**不把凭据问题算作故障**，也不虚报全线告急：
     分母只在**实际纳入观测**的接口上取。
-    """
-    no_key = int(counts.get("not_monitored") or 0)
-    n_mon = max(0, n_rows - no_key)
-    ok = int(counts.get("ok") or 0)
-    limited = int(counts.get("limited") or 0)
-    issues = int(counts.get("down") or 0) + int(counts.get("pending") or 0)
-    unmon = n_rows - n_mon
 
+    `counts` 必须来自 `_bucket_counts`（完整划分），所以列出各项之和
+    **恰好等于**分母；否则会说出「共观测 5 个接口：2 个正常、2 个受限流」
+    这种一加就发现对不上的话。
+    """
+    unmon = int(counts.get("not_monitored") or 0)
+    n_mon = max(0, n_rows - unmon)
     if n_mon == 0:
         text = "本轮暂无接口纳入观测。"
     else:
-        parts = [f"{ok} 个正常"]
-        if limited:
-            parts.append(f"{limited} 个受限流")
-        if issues:
-            parts.append(f"{issues} 个异常")
+        parts = [f"{int(counts.get('ok') or 0)} 个正常"]
+        for key, word in (("limited", "个受限流"), ("issues", "个异常"),
+                          ("pending", "个待定"), ("disabled", "个已停用"),
+                          ("unknown", "个状态未知")):
+            n = int(counts.get(key) or 0)
+            if n:
+                parts.append(f"{n} {word}")
         text = f"本轮共观测 {n_mon} 个接口：" + "、".join(parts) + "。"
     if unmon:
         text += f"另有 {unmon} 个接口本轮{NOT_MONITORED_LABEL}。"
@@ -466,25 +518,20 @@ def _public_summary(counts: dict, n_rows: int) -> str:
 def _publicize_overview(ov: dict) -> None:
     """把运维视角的总览改写成访客视角（**原地改**）。
 
-    三处改写，都是为了「公开页不出现凭据/内部网络语」：
+    四处改写，前两处是「不出现凭据/内部网络语」，后两处是「不说对不上的话」：
 
     ① `headline.text` —— 原本是操作者的待办清单，含「缺少密钥」。改为
-       `headline.summary`（访客口径，见 `_public_summary`）；`counts` 原样保留
-       （纯计数，不含措辞），供前端做 KPI。
+       `headline.summary`（访客口径，见 `_public_summary`）。
     ② `common_cause` —— 内部诊断，会写进**代理地址与端口**、判断「本机网络问题」，
        整体不公开（实测当前为 null，但它随时可能出现）。
     ③ 矩阵行 —— 每层先按 `_LAYER_KEEP` **收窄到访客字段**（这一步同时删掉
        `reason`/`fail_stage`/`since`/`heartbeat`），再把留下的 `state` 里的凭据态
        改称 `NOT_MONITORED_LABEL`；`final` 与 `recommendation.missing` 一并改写。
+    ④ `counts` —— **丢弃上游那份、改从矩阵行重新聚合**（`_bucket_counts`）。
+       上游 counts 有损会漏掉认不出的结论，用它写文案必然出现
+       「宣称 N 个、只说得出 N-1 个」。行是访客真正看到的表，所以以行为准。
     """
-    counts = dict((ov.get("headline") or {}).get("counts") or {})
     rows = ov.get("matrix") or []
-
-    # 计数键也跟着改名：公开契约不该**建模**「缺凭据」这个概念，
-    # 否则前端迟早会把它读出来当文案用（首版就是这样漏的）。
-    if "no_key" in counts:
-        counts["not_monitored"] = counts.pop("no_key")
-
     for row in rows:
         if not isinstance(row, dict):
             continue
@@ -505,6 +552,8 @@ def _publicize_overview(ov: dict) -> None:
         if isinstance(rec, dict) and rec.get("missing"):
             rec["missing"] = [_OPS_REASON_REPLACE.get(m, m) for m in rec["missing"]]
 
+    # 状态名改写完再聚合，保证分档与访客看到的 `final` 完全同源。
+    counts = _bucket_counts(rows)
     ov["headline"] = {"summary": _public_summary(counts, len(rows)), "counts": counts}
     ov.pop("common_cause", None)
 

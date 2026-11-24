@@ -147,8 +147,10 @@
 4. **改写运维语为访客语**（同一函数，原地改）：
    - `headline`：**去掉**运维稿 `text`（那是给操作者的待办清单，且含"缺少密钥"），
      改为 `summary` —— 访客口径的一句话，**分母只算本轮真正纳入观测的接口**
-     （旧稿把"未纳入观测"算进分母，会得出"5 个接口中 1 个可用"这种看似全线告急的结论）；
-     保留 `counts` 供前端做 KPI，但计数键 `no_key` → `not_monitored`。
+     （旧稿把"未纳入观测"算进分母，会得出"5 个接口中 1 个可用"这种看似全线告急的结论）。
+     `counts` **不用上游那份、改从矩阵行重新聚合**（`_bucket_counts`），键名换成
+     公开契约那套 `ok` / `limited` / `issues` / `pending` / `disabled` /
+     `not_monitored` / `unknown`（不存在 `no_key`）。见下方注。
    - `common_cause`：**整体不公开**。它是内部诊断，会写进**代理地址与端口**
      （如"代理未启动（127.0.0.1:7890）"），并判断"本机网络问题"。
    - 矩阵行：`l1.state` / `l2.state` 里的 `no_key` / `NOT_CONFIGURED` → `not_monitored`；
@@ -163,6 +165,17 @@
 
    > **正向白名单的收益是双份的**：第 3 条同时堵住了 `reason` 的口子和压缩了产物体积。
    > `heartbeat` 一项就占了整包约一半——收窄后 `overview` 从 62 KB 降到约 20 KB。
+
+   > **为什么 `counts` 要重新聚合，不能直接用上游**：`status_engine` 的 `counts` 是
+   > **有损**的——它用 `elif final.lower() in counts` 只认 6 个已知词，于是
+   > `RESPONSE_INVALID` / `ENDPOINT_ERROR` / `NETWORK_ERROR` / `REASONING_STARVED` /
+   > `WAF_BLOCKED` / `MODEL_GONE` / `QUOTA_EXHAUSTED` 等等**全被静默丢弃**。
+   > 线上真实出现过"宣称共观测 5 个接口、却只说得出 4 个，且唯一的异常接口被整个吞掉"。
+   > 公开层的 `_bucket_counts` 是**完整划分**：认不出的结论一律落到「异常」
+   > （`_BUCKET_FALLBACK = "issues"`，宁可多报不可漏报），空值落到 `unknown`，
+   > 于是不变式 **`sum(counts.values()) == len(matrix)`** 恒成立，文案与访客看到的
+   > 表格不可能互相矛盾。改口径时**只改这一个函数**，文案（`_public_summary`）
+   > 与前端 KPI 都从它取数。
 
 公开页要"最后探测多久以前"，用 `meta.dataAsOf` 与 `endpoints.items[].lastProbeAt` 在前端推算。
 **新鲜度必须按 UTC+8 算**（项目固定时间口径），不能用访问者本机时钟——

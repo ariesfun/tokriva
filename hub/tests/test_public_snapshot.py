@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 import tempfile
 import unittest
@@ -186,6 +187,70 @@ class PublicSnapshotTest(unittest.TestCase):
                     self.assertFalse(
                         extra, f"窗口 {win} 的 {key} 多出访客不该看到的字段：{sorted(extra)}")
         self.assertGreater(seen, 0, "没走到断言路径——layers 结构变了，本用例需同步更新")
+
+    def test_headline_counts_partition_matrix_rows(self):
+        """`counts` 必须是矩阵行的**完整划分**，且键名就是公开契约那套。
+
+        上游 `status_engine` 的 counts 只认 6 个已知词（`elif final.lower() in counts`），
+        其余结论（`RESPONSE_INVALID` / `ENDPOINT_ERROR` / `NETWORK_ERROR` /
+        `REASONING_STARVED` …）会被**静默丢弃**。用它写文案必然出现
+        「宣称共观测 N 个接口、却只说得出 N-1 个」。所以公开层改为从行聚合；
+        本用例守住这条接线（把 `_publicize_overview` 改回用上游 counts 即失败）。
+        """
+        snap = self._build(probes_limit=50)
+        seen = 0
+        for win, blk in (snap.get("overview") or {}).items():
+            if not isinstance(blk, dict) or not blk.get("matrix"):
+                continue
+            seen += 1
+            rows = blk["matrix"]
+            counts = blk["headline"]["counts"]
+            self.assertEqual(set(counts), set(public_snapshot.PUBLIC_COUNT_KEYS),
+                             f"窗口 {win}：计数键变了，前端与政策文档需同步")
+            self.assertEqual(sum(counts.values()), len(rows),
+                             f"窗口 {win}：counts 之和 {sum(counts.values())} != 行数 {len(rows)}")
+            for r in rows:
+                raw = str(r.get("final") or "").upper()
+                self.assertTrue(
+                    raw in public_snapshot._FINAL_BUCKET or not raw,
+                    f"窗口 {win}：{raw} 既没有档位也不是空值，会被静默丢弃")
+        self.assertGreater(seen, 0, "没走到断言路径")
+
+    def test_summary_numbers_add_up_and_keep_anomalies(self):
+        """文案里列出的各项之和必须等于分母，且异常接口不能被吞掉。
+
+        复刻线上真实形状：2 个 OK、2 个 LIMITED、1 个 `RESPONSE_INVALID`。
+        修复前上游 counts 少算这一档，于是出现「共观测 5 个接口：2 个正常、
+        2 个受限流」——一加就发现对不上，而且把唯一的异常接口整个吞掉了。
+        """
+        finals = ["OK", "OK", "LIMITED", "LIMITED", "RESPONSE_INVALID"]
+        rows = [{"final": f} for f in finals]
+        counts = public_snapshot._bucket_counts(rows)
+        self.assertEqual(sum(counts.values()), len(rows))
+        self.assertEqual(counts["issues"], 1, "认不出的结论必须落到「异常」，不能丢")
+        text = public_snapshot._public_summary(counts, len(rows))
+
+        m = re.match(r"本轮共观测 (\d+) 个接口：(.+?)。", text)
+        self.assertIsNotNone(m, text)
+        total = int(m.group(1))
+        listed = sum(int(x) for x in re.findall(r"(\d+)\s*个", m.group(2)))
+        self.assertEqual(listed, total, f"文案 {text} 各项之和 {listed} != 分母 {total}")
+        self.assertIn("1 个异常", text)
+
+    def test_bucket_counts_totality(self):
+        """分档函数必须**全收**：认不出的词、空值都不能凭空消失。"""
+        rows = [{"final": "RESPONSE_INVALID"}, {"final": "NETWORK_ERROR"},
+                {"final": "WAF_BLOCKED"}, {"final": None}, {"final": ""},
+                {"final": "ok"}, {"final": "limited"}, {"final": "no_key"},
+                {"final": "NO_KEY"}, {"final": "NOT_CONFIGURED"}]
+        c = public_snapshot._bucket_counts(rows)
+        self.assertEqual(sum(c.values()), len(rows))
+        self.assertEqual(c["ok"], 1)               # `ok` 小写也要认（大小写不敏感）
+        self.assertEqual(c["limited"], 1)
+        # `no_key` / `NO_KEY` / `NOT_CONFIGURED` 都是凭据态，归「未纳入观测」
+        self.assertEqual(c["not_monitored"], 3)
+        self.assertEqual(c["issues"], 3)           # 三个认不出的结论
+        self.assertEqual(c["unknown"], 2)          # None 与空串
 
     def test_probe_projection_drops_bodies_and_egress(self):
         snap = self._build(probes_limit=50)
