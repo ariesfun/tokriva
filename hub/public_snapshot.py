@@ -74,6 +74,34 @@ FRESH_MIN, STALE_MIN = 90, 180
 # 公开的测量范围声明：只代表**一条固定出口**的体验，不代表全球网络
 MEASUREMENT_SCOPE = "single-origin-network"
 
+# ---------------------------------------------------------------------------
+# 运维语 → 访客语 的改写表（见 `_publicize_overview`）
+# ---------------------------------------------------------------------------
+#: 凭据态统一改称的访客措辞。对访客只意味着「该接口本轮不构成有效观测」。
+NOT_MONITORED_LABEL = "未纳入观测"
+#: 矩阵层状态里的凭据态（`l1.state` / `l2.state`）
+_OPS_STATE_ALIAS = {"no_key": "not_monitored", "NOT_CONFIGURED": "not_monitored"}
+#: 最终判定里的凭据态（`final`）。`AUTH_FAILED` 同属「本机凭据未就绪」，
+#: 与 `NO_KEY` 一样是**操作者要处理的事**，对访客无意义且泄露本机凭据配置。
+_OPS_FINAL_ALIAS = {"NO_KEY": "NOT_MONITORED", "AUTH_FAILED": "NOT_MONITORED"}
+#: 推荐理由里禁止出现的凭据措辞（`recommendation.missing`）
+_OPS_REASON_REPLACE = {"缺少密钥": NOT_MONITORED_LABEL, "鉴权失败": NOT_MONITORED_LABEL}
+
+#: 矩阵各层**允许公开**的字段——正向白名单，未列出的字段一律删除。
+#:
+#: 为什么不整个放开：layer 里混着三类只对操作者有意义的字段，
+#:   * `reason` 是内部原因码，实测会写进 `NOT_CONFIGURED`——正是凭据态的**内部名**
+#:     （结构化字段 `hasKey` 被剥掉了，同一信息却从这个散文口子漏出去）；
+#:   * `fail_stage` / `since` 是定位失败环节与起始时刻的排查线索；
+#:   * `heartbeat` 是逐轮探测流水，**体积最大**（实测占整包约 51%），公开页并不渲染。
+#: 下面这些是 `web/public/public.js` 实际消费的全部字段（含三层的 `state`）。
+#: 白名单化的收益是双份的：堵住措辞泄漏，**同时**把产物体积压掉一半。
+_LAYER_KEEP: dict[str, tuple[str, ...]] = {
+    "l1": ("state", "consec"),
+    "l2": ("state", "skipped", "availability", "healthy", "denom", "window_total"),
+    "l3": ("state", "skipped", "ttft_p50", "tps_p50"),
+}
+
 # provider 内部名 -> 公开别名（留空即原名公开；需要匿名化时在此登记）
 PROVIDER_ALIAS: dict[str, str] = {}
 
@@ -188,6 +216,18 @@ CANARY_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 # 例：overview 的 final="NO_KEY"（缺少密钥）；不豁免会被 env_key_name 规则误杀。
 CANARY_ALLOW = frozenset({"NO_KEY", "HAS_KEY"})
 
+#: 公开页禁止出现的**运维措辞**（内容级硬拦）。
+#:
+#: 为什么要有这一档：`FORBIDDEN_KEYS` 只挡**结构化**的凭据暴露（如 `hasKey`），
+#: 但同一信息能以散文形式溜出去——实测首版公开产物里「缺少密钥」出现 **55 次**
+#: （`headline.text` 与 `recommendation.missing`）。对访客，这类话既无法处置，
+#: 又泄露「本机是否配了凭据 / 代理链路通不通」。故此处按**整句**拦截。
+OPS_PHRASE_BAN = (
+    "缺少密钥", "鉴权失败", "未配置", "代理未启动", "代理链路",
+    "本机网络问题", "同窗口直连", "启动代理后恢复",
+    "NOT_CONFIGURED", "no_key",
+)
+
 
 def _walk_keys(obj: Any, path: str = "$") -> Iterable[tuple[str, str]]:
     if isinstance(obj, dict):
@@ -223,7 +263,8 @@ def drop_volatile(obj: Any) -> Any:
 def scan_payload(payload: Any) -> list[dict[str, str]]:
     """扫描公开产物，返回发现清单（空 = 通过）。
 
-    两层：① 结构——递归找禁用键名；② 内容——对 JSON 文本跑 canary 正则。
+    三层：① 结构——递归找禁用键名；② 内容——对 JSON 文本跑 canary 正则；
+    ③ 措辞——明文拦运维语（见 `OPS_PHRASE_BAN`）。
     """
     findings: list[dict[str, str]] = []
     for path, key in _walk_keys(payload):
@@ -239,6 +280,9 @@ def scan_payload(payload: Any) -> list[dict[str, str]]:
                 continue
             seen.add(frag)
             findings.append({"rule": name, "where": "content", "match": frag})
+    for phrase in OPS_PHRASE_BAN:
+        if phrase in text:
+            findings.append({"rule": "ops_phrase", "where": "content", "match": phrase})
     return findings
 
 
@@ -390,6 +434,81 @@ def _catalog(conn) -> dict:
     return {"items": [{k: r.get(k) for k in keep} for r in rows]}
 
 
+def _public_summary(counts: dict, n_rows: int) -> str:
+    """访客口径的一句话结论。
+
+    运维稿是「N 个接口中 M 个可用；X 缺少密钥…」——那是**给操作者的待办清单**，
+    而且「缺少密钥」泄露的正是 `matrix[].hasKey` 被剥掉要保护的信息（本机凭据配置）。
+    公开稿只谈「本轮观测到什么」，**不把凭据问题算作故障**，也不虚报全线告急：
+    分母只在**实际纳入观测**的接口上取。
+    """
+    no_key = int(counts.get("not_monitored") or 0)
+    n_mon = max(0, n_rows - no_key)
+    ok = int(counts.get("ok") or 0)
+    limited = int(counts.get("limited") or 0)
+    issues = int(counts.get("down") or 0) + int(counts.get("pending") or 0)
+    unmon = n_rows - n_mon
+
+    if n_mon == 0:
+        text = "本轮暂无接口纳入观测。"
+    else:
+        parts = [f"{ok} 个正常"]
+        if limited:
+            parts.append(f"{limited} 个受限流")
+        if issues:
+            parts.append(f"{issues} 个异常")
+        text = f"本轮共观测 {n_mon} 个接口：" + "、".join(parts) + "。"
+    if unmon:
+        text += f"另有 {unmon} 个接口本轮{NOT_MONITORED_LABEL}。"
+    return text
+
+
+def _publicize_overview(ov: dict) -> None:
+    """把运维视角的总览改写成访客视角（**原地改**）。
+
+    三处改写，都是为了「公开页不出现凭据/内部网络语」：
+
+    ① `headline.text` —— 原本是操作者的待办清单，含「缺少密钥」。改为
+       `headline.summary`（访客口径，见 `_public_summary`）；`counts` 原样保留
+       （纯计数，不含措辞），供前端做 KPI。
+    ② `common_cause` —— 内部诊断，会写进**代理地址与端口**、判断「本机网络问题」，
+       整体不公开（实测当前为 null，但它随时可能出现）。
+    ③ 矩阵行 —— 每层先按 `_LAYER_KEEP` **收窄到访客字段**（这一步同时删掉
+       `reason`/`fail_stage`/`since`/`heartbeat`），再把留下的 `state` 里的凭据态
+       改称 `NOT_MONITORED_LABEL`；`final` 与 `recommendation.missing` 一并改写。
+    """
+    counts = dict((ov.get("headline") or {}).get("counts") or {})
+    rows = ov.get("matrix") or []
+
+    # 计数键也跟着改名：公开契约不该**建模**「缺凭据」这个概念，
+    # 否则前端迟早会把它读出来当文案用（首版就是这样漏的）。
+    if "no_key" in counts:
+        counts["not_monitored"] = counts.pop("no_key")
+
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        layers = row.get("layers")
+        if isinstance(layers, dict):
+            for key, keep in _LAYER_KEEP.items():
+                layer = layers.get(key)
+                if not isinstance(layer, dict):
+                    continue
+                trimmed = {k: layer[k] for k in keep if k in layer}
+                if trimmed.get("state") in _OPS_STATE_ALIAS:
+                    trimmed["state"] = _OPS_STATE_ALIAS[trimmed["state"]]
+                layers[key] = trimmed
+        if row.get("final") in _OPS_FINAL_ALIAS:
+            row["final"] = _OPS_FINAL_ALIAS[row["final"]]
+            row["final_label"] = NOT_MONITORED_LABEL
+        rec = row.get("recommendation")
+        if isinstance(rec, dict) and rec.get("missing"):
+            rec["missing"] = [_OPS_REASON_REPLACE.get(m, m) for m in rec["missing"]]
+
+    ov["headline"] = {"summary": _public_summary(counts, len(rows)), "counts": counts}
+    ov.pop("common_cause", None)
+
+
 def _overview(conn, hours: int) -> dict:
     """状态总览。做两件事：剥掉 `hasKey`，以及剥掉所有「现在」派生的易变字段。
 
@@ -399,12 +518,17 @@ def _overview(conn, hours: int) -> dict:
        会让「库没变 → 产物不变」失效（报告 §7.3 第 8 条要求构建幂等）。
        公开页要「最后探测多久以前」，可用 `meta.dataAsOf` 与
        `endpoints.items[].lastProbeAt` 在前端自行推算，不必由后端固化一个会过期的秒数。
+    ③ 再走一趟 `_publicize_overview`：把运维语（含「缺少密钥」这类凭据措辞）
+       换成访客语，并把各层字段收窄到 `_LAYER_KEEP`。剥 `hasKey` 只挡住了**结构化**的
+       凭据暴露，散文里的同一信息（`headline.text` / `recommendation.missing` /
+       `layers.*.reason`）必须一起挡住——首版上线后正是因为漏了后面这层才被访客看到。
     """
     from .status_engine import build_overview
     ov = build_overview(conn, window_hours=hours)
     for m in ov.get("matrix", []) or []:
         if isinstance(m, dict):
             m.pop("hasKey", None)
+    _publicize_overview(ov)
     return drop_volatile(ov)
 
 
@@ -421,6 +545,10 @@ def _alltime(conn) -> dict:
         "SELECT level, COUNT(*) n FROM probe_result GROUP BY level")}
     by_status = {r["status"] or "—": r["n"] for r in conn.execute(
         "SELECT status, COUNT(*) n FROM probe_result GROUP BY status")}
+    # 状态直方图里也有「凭据态」这个桶。它是个**键名**，同样是公开契约的一部分，
+    # 一并改成中性词——否则前端迟早会把它当文案念给访客听。
+    if "NOT_CONFIGURED" in by_status:
+        by_status["NOT_MONITORED"] = by_status.pop("NOT_CONFIGURED")
     daily = []
     for r in conn.execute(
             "SELECT date(created_at) d, COUNT(*) n, "

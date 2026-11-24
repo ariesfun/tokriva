@@ -124,15 +124,49 @@
 ### 2.4 `overview.<hours>` — 状态总览
 
 复用 `hub.status_engine.build_overview(conn, window_hours=...)`。该结构本就是面向
-"现在状态"的展示层，不含绝对路径与凭据明文；保留其 `matrix` / `headline` /
-`common_cause` 等字段，但**做两处裁剪**：
+"现在状态"的展示层，不含绝对路径与凭据明文；保留其 `matrix` / `counts` 等字段，
+但**做四类裁剪与改写**（见 `public_snapshot._publicize_overview`）：
 
-1. 剥掉 `matrix[].hasKey` —— 暴露"本机是否为某接口配置了凭据"，属运维内部信息
-   （页面上仍能从 `final=NO_KEY` 得到"未接入"结论）；
+1. 剥掉 `matrix[].hasKey` —— 暴露"本机是否为某接口配置了凭据"，属运维内部信息。
 2. 剥掉所有**「现在」派生的易变字段**（`generated_at` / `age_sec`，**递归**）——理由见 §2.9。
+3. **矩阵各层按正向白名单收窄**（`_LAYER_KEEP`），未列出的字段一律删除。
+   `status_engine` 的 layer 里混着三类只对操作者有意义的字段：
 
-公开页要"最后探测多久以前"，用 `meta.dataAsOf` 与 `endpoints.items[].lastProbeAt`
-在前端自行推算，不必由后端固化一个会过期的秒数。
+   | 字段 | 为什么不能公开 |
+   | --- | --- |
+   | `reason` | 内部原因码。实测会写进 `NOT_CONFIGURED`——**凭据态的内部名**。`hasKey` 剥掉了，同一信息却从这个散文口子漏出去 |
+   | `fail_stage` / `since` | 定位失败环节与起始时刻的排查线索 |
+   | `heartbeat` | 逐轮探测流水，**体积最大**（实测占整包约 51%），公开页并不渲染 |
+
+   保留下来的是公开页**实际消费**的全部字段（`grep -oE '(l1|l2|l3)\.[a-z_0-9]+' web/public/public.js` 可复核）：
+
+   - `l1`：`state`、`consec`
+   - `l2`：`state`、`skipped`、`availability`、`healthy`、`denom`、`window_total`
+   - `l3`：`state`、`skipped`、`ttft_p50`、`tps_p50`
+
+4. **改写运维语为访客语**（同一函数，原地改）：
+   - `headline`：**去掉**运维稿 `text`（那是给操作者的待办清单，且含"缺少密钥"），
+     改为 `summary` —— 访客口径的一句话，**分母只算本轮真正纳入观测的接口**
+     （旧稿把"未纳入观测"算进分母，会得出"5 个接口中 1 个可用"这种看似全线告急的结论）；
+     保留 `counts` 供前端做 KPI，但计数键 `no_key` → `not_monitored`。
+   - `common_cause`：**整体不公开**。它是内部诊断，会写进**代理地址与端口**
+     （如"代理未启动（127.0.0.1:7890）"），并判断"本机网络问题"。
+   - 矩阵行：`l1.state` / `l2.state` 里的 `no_key` / `NOT_CONFIGURED` → `not_monitored`；
+     `final` 的 `NO_KEY` / `AUTH_FAILED` → `NOT_MONITORED`（`final_label` 同步）；
+     `recommendation.missing` 里的凭据措辞一并替换。
+
+   > **为什么连"缺少密钥"这种散文也要挡**：§2.4 第 1 条剥 `hasKey` 是为了不暴露
+   > "本机凭据配置"，而 `headline.text` 里的"LightVela 缺少密钥"泄露的**是同一条信息**，
+   > 只是换成了散文。首版公开产物里该措辞出现 **55 次**（`headline.text` +
+   > `recommendation.missing`）。对访客，这类话既无法处置、又有信息价值——
+   > 所以由 `scan_payload` 的 `OPS_PHRASE_BAN` **硬拦**，回归会直接让构建失败。
+
+   > **正向白名单的收益是双份的**：第 3 条同时堵住了 `reason` 的口子和压缩了产物体积。
+   > `heartbeat` 一项就占了整包约一半——收窄后 `overview` 从 62 KB 降到约 20 KB。
+
+公开页要"最后探测多久以前"，用 `meta.dataAsOf` 与 `endpoints.items[].lastProbeAt` 在前端推算。
+**新鲜度必须按 UTC+8 算**（项目固定时间口径），不能用访问者本机时钟——
+否则海外访客所在时区与北京相差数小时，会把"刚更新过"显示成"已过期"。
 
 ### 2.5 `overview.allTime` — 全历史聚合（**与各窗口分开算**）
 
@@ -140,6 +174,8 @@
 
 `totalProbes`、`healthy`、`availability`、`firstAt`、`lastAt`、`endpointCount`、
 `modelCount`、`byLevel{}`、`byStatus{}`、`daily[]`（按自然日聚合的序列）。
+`byStatus` 里的凭据态键名同样是 `NOT_MONITORED`（不是库内的 `NOT_CONFIGURED`）——
+它是个**键名**，仍属公开契约的一部分。
 
 放在 `overview` 之下（键名 `allTime`）而非顶层：它与 `"1"`…`"720"` 是同一种东西的
 不同取值，分家会让人误以为是并列的另一个集合。

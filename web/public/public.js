@@ -60,14 +60,27 @@
     skip: { label: '未测', cls: 'plain' },
     skipped: { label: '未测', cls: 'plain' },
     pending: { label: '待定', cls: 'plain' },
+    // 「本机没配凭据」对访客只意味着「该接口本轮不构成有效观测」。
+    // 公开契约里后端已把 no_key / NOT_CONFIGURED 统一改称 not_monitored。
+    not_monitored: { label: '未纳入观测', cls: 'plain' },
     unknown: { label: '未知', cls: 'plain' }
+  };
+
+  //: 最终判定的**访客措辞兜底**。后端已改写过 `final_label`，这里只防老快照。
+  var FINAL_LABEL_FALLBACK = {
+    NOT_MONITORED: '未纳入观测',
+    NO_KEY: '未纳入观测',
+    AUTH_FAILED: '未纳入观测'
   };
 
   var STATUS_MAP = {
     HEALTHY: { label: '正常', cls: 'ok' },
     RATE_LIMITED: { label: '限流', cls: 'warn' },
     REASONING_STARVED: { label: '推理耗尽', cls: 'info' },
-    NOT_CONFIGURED: { label: '未配置', cls: 'plain' },
+    // 公开契约里这一态的键名是 `NOT_MONITORED`（后端把 `NOT_CONFIGURED` 改名了）；
+    // 老键名保留作兜底，文案一律是中性词，不出现在访客面前。
+    NOT_MONITORED: { label: '未纳入观测', cls: 'plain' },
+    NOT_CONFIGURED: { label: '未纳入观测', cls: 'plain' },
     NETWORK_ERROR: { label: '网络错误', cls: 'danger' },
     ENDPOINT_ERROR: { label: '接口错误', cls: 'danger' },
     RESPONSE_INVALID: { label: '响应异常', cls: 'danger' }
@@ -161,14 +174,36 @@
   }
 
   // 数据新鲜度（报告 §16.2：≤90min fresh / 90–180 stale / >180 expired）
+  // 项目时间口径**固定 Asia/Shanghai（UTC+8）**：库里的时间戳都是北京时间墙上时间，
+  // 前端不做跨时区换算（见 docs/public-data-policy.md §2.8 的 timezone 字段）。
+  //
+  // 因此新鲜度**必须**按 UTC+8 的当前时刻算，而不是访问者本机时钟——否则海外访客
+  // 会看到他所在时区与北京时间相差几小时，于是「才更新过的数据」被显示成「已过期」。
+  var UTC8_OFFSET_MS = 8 * 3600 * 1000;
+
+  function nowUtc8Ms() {
+    var d = new Date();
+    return d.getTime() + d.getTimezoneOffset() * 60000 + UTC8_OFFSET_MS;
+  }
+
+  function parseUtc8Ts(ts) {
+    if (!ts) return null;
+    // 末尾补 `Z` 强制按 UTC 解析，再整体 +8h → 得到「UTC+8 墙上时间对应的毫秒数」
+    var d = new Date(String(ts).replace(' ', 'T') + 'Z');
+    if (isNaN(d.getTime())) return null;
+    return d.getTime() + UTC8_OFFSET_MS;
+  }
+
   function freshnessOf(dataAsOf) {
-    var d = parseLocalTs(dataAsOf);
-    if (!d) return { state: 'unknown', label: '暂无可用数据', note: '快照未提供数据时间' };
-    var mins = (Date.now() - d.getTime()) / 60000;
-    if (mins < 0) return { state: 'fresh', label: '数据更新正常', note: '数据时间晚于本机时钟（请检查时区）' };
-    if (mins <= 90) return { state: 'fresh', label: '数据更新正常', note: '数据截至 ' + fmtTs(dataAsOf) };
-    if (mins <= 180) return { state: 'stale', label: '数据可能延迟', note: '距上次数据约 ' + Math.round(mins) + ' 分钟' };
-    return { state: 'expired', label: '数据已过期', note: '距上次数据约 ' + Math.round(mins / 60) + ' 小时，请谨慎参考' };
+    var ms = parseUtc8Ts(dataAsOf);
+    if (ms == null) return { state: 'unknown', label: '暂无可用数据', note: '快照未提供数据时间' };
+    var mins = (nowUtc8Ms() - ms) / 60000;
+    var when = '数据截至 ' + fmtTs(dataAsOf) + '（北京时间）';
+    if (mins < 0) return { state: 'fresh', label: '数据更新正常', note: when + '，晚于当前时刻' };
+    if (mins < 1) return { state: 'fresh', label: '数据更新正常', note: when + '（刚刚）' };
+    if (mins <= 90) return { state: 'fresh', label: '数据更新正常', note: when + '，约 ' + Math.round(mins) + ' 分钟前' };
+    if (mins <= 180) return { state: 'stale', label: '数据可能延迟', note: when + '，约 ' + Math.round(mins) + ' 分钟前' };
+    return { state: 'expired', label: '数据已过期', note: when + '，约 ' + Math.round(mins / 60) + ' 小时前，请谨慎参考' };
   }
 
   /* ================= 数据层（报告 §10.4 适配层） ================= */
@@ -250,6 +285,19 @@
     if (!s) return badge('—', 'plain', false);
     var m = STATE_MAP[String(s).toLowerCase()] || { label: String(s), cls: 'plain' };
     return badge(m.label, m.cls);
+  }
+
+  /**
+   * 最终判定的展示文案。
+   *
+   * 后端已经把凭据态改写成「未纳入观测」（`final_label`），但**前端也要守一道**：
+   * 老快照或后端回归时，`NO_KEY` / `AUTH_FAILED` 会带着运维措辞漏到访客面前，
+   * 所以这里按 `final` 再兜底一次，而不是无脑相信 `final_label`。
+   */
+  function finalLabel(row) {
+    var raw = String((row && row.final) || '').toUpperCase();
+    if (FINAL_LABEL_FALLBACK[raw]) return FINAL_LABEL_FALLBACK[raw];
+    return dash(row && row.final_label, dash(row && row.final));
   }
 
   function statusBadge(s) {
@@ -356,7 +404,7 @@
       '<td class="num">' + avail + '</td>' +
       '<td class="num">' + lat + '</td>' +
       '<td class="num">' + (isNum(l3.tps_p50) ? fmtTps(l3.tps_p50) : '<span class="muted">—</span>') + '</td>' +
-      '<td>' + badge(dash(row.final_label, dash(row.final)), severityCls(row.severity)) + '</td>' +
+      '<td>' + badge(finalLabel(row), severityCls(row.severity)) + '</td>' +
       '<td class="num">' + (samples ? fmtInt(samples) : '<span class="muted">—</span>') + '</td>' +
       '<td class="muted small" style="max-width:240px">' + modelCell + '</td>' +
       '</tr>';
@@ -390,10 +438,19 @@
     }, 0);
 
     var okCount = isNum(counts.ok) ? counts.ok : 0;
+    // 后端把计数键也改名为 `not_monitored`；`no_key` 只作为老快照兜底。
+    var noKeyCount = isNum(counts.not_monitored) ? counts.not_monitored
+      : (isNum(counts.no_key) ? counts.no_key : 0);
     var epCount = isNum(meta.endpointsCount) ? meta.endpointsCount : (state.snapshot.endpoints && state.snapshot.endpoints.items ? state.snapshot.endpoints.items.length : null);
+    // 分母用**本轮真正纳入观测的接口数**，而不是全部接口数：把「未纳入观测」算进分母，
+    // 会得出「5 个接口中 1 个可用」这种看似全线告急、实则大部分接口本轮没被测的结论。
+    var monitored = rows.length ? rows.length - noKeyCount : null;
+    var availSub = (monitored != null && epCount != null && monitored < epCount)
+      ? '本窗口 · 另有 ' + (epCount - monitored) + ' 个未纳入观测'
+      : '本窗口 · ' + (WINDOW_LABELS[win] || win);
 
     var kpis =
-      kpi('可用接口', okCount + ' / ' + (epCount == null ? '—' : epCount), '本窗口 · ' + (WINDOW_LABELS[win] || win)) +
+      kpi('可用接口', okCount + ' / ' + (monitored == null ? '—' : monitored), availSub) +
       kpi('本窗口探测', winProbes ? fmtInt(winProbes) : '—', '各接口合计') +
       kpi('全量可用率', isNum(allTime.availability) ? fmtPct(allTime.availability, 1) : '—', '全部历史 ' + fmtInt(allTime.totalProbes) + ' 次探测') +
       kpi('可观测模型', isNum(meta.modelCount) ? fmtInt(meta.modelCount) : '—', '快照内模型数');
@@ -402,11 +459,9 @@
       return '<button data-win="' + esc(k) + '"' + (k === win ? ' class="is-active"' : '') + '>' + esc(WINDOW_LABELS[k] || k) + '</button>';
     }).join('') + '</div>';
 
-    var headline = ov.headline && ov.headline.text
-      ? '<div class="status-line" style="margin-bottom:12px"><svg class="ico"><use href="#i-info"/></svg><p>' + esc(ov.headline.text) + '</p></div>'
-      : '';
-
-    var cause = ov.common_cause ? '<div class="status-line" style="margin:12px 0"><svg class="ico"><use href="#i-info"/></svg><p>共性原因：' + esc(ov.common_cause) + '</p></div>' : '';
+    // 后端已把运维稿换成访客稿（`headline.summary`，不再含「缺少密钥」这类措辞）。
+    // `text` 分支是给老快照的兜底，**新契约不会走到**。
+    var summary = (ov.headline && (ov.headline.summary || ov.headline.text)) || '';
 
     var table =
       '<div class="table-scroll"><table><thead><tr>' +
@@ -419,9 +474,9 @@
       '<div class="page-head"><h1>' + esc(PROJECT) + ' · 公开总览</h1>' +
       '<p class="lede">免费 AI 接口的周期性探测结果（只读镜像）。数据来自单一测量出口，窗口以墙上时钟切分。详情见「方法说明」。</p></div>' +
       '<div class="toolbar">' + seg + '<span class="spacer"></span>' +
-      '<span class="muted small">探测时间 ' + esc(fmtTs(ov.probe && ov.probe.last_cycle_at)) + ' · 规则版本 ' + esc(dash(ov.rules_version)) + '</span></div>' +
+      '<span class="muted small">最近一轮探测 ' + esc(fmtTs(ov.probe && ov.probe.last_cycle_at)) + ' · 规则版本 ' + esc(dash(ov.rules_version)) + '</span></div>' +
       '<div class="kpis" style="margin-bottom:14px">' + kpis + '</div>' +
-      headline + cause +
+      (summary ? '<div class="status-line" style="margin-bottom:12px"><svg class="ico"><use href="#i-info"/></svg><p>' + esc(summary) + '</p></div>' : '') +
       '<div class="section-head"><h2>接口状态矩阵</h2><span class="hint">' + esc(WINDOW_LABELS[win] || win) + ' · ' + rows.length + ' 个接口</span></div>' +
       table +
       '</section>';
@@ -691,12 +746,18 @@
     var fresh = '<h3>数据新鲜度阈值</h3><ul>' +
       '<li>≤ 90 分钟：数据更新正常</li><li>90 – 180 分钟：数据可能延迟</li>' +
       '<li>&gt; 180 分钟：数据已过期，请谨慎参考</li><li>无有效时间：暂无可用数据</li></ul>' +
-      '<p class="muted small">阈值随实际探测周期调整；本页按「数据截至时间」与访问者本机时钟实时计算。</p>';
+      '<p class="muted small">阈值随实际探测周期调整。新鲜度按<strong>北京时间（UTC+8，项目固定口径）</strong>计算，' +
+      '与访问者所在时区无关；页头徽标同时给出数据更新到的具体时刻。</p>';
+
+    var scope = '<h3>关于「未纳入观测」</h3>' +
+      '<p>部分接口本轮没有产生有效观测数据。原因只与测量端配置有关，' +
+      '不代表该服务本身有问题，也不计入可用率分母——本页所有可用率都只在' +
+      '<strong>实际观测到的样本</strong>上计算。</p>';
 
     return '<section class="section"><div class="page-head"><h1>方法说明</h1>' +
       '<p class="lede">数据如何产生、口径如何定义、榜单如何排序。所有说明逐项对应后端计算代码，不做额外推断。</p></div>' +
       disclaimer +
-      '<div class="card"><div class="card-pad prose">' + basics + rankings + states + fresh +
+      '<div class="card"><div class="card-pad prose">' + basics + scope + rankings + states + fresh +
       '<h3>源码</h3><ul><li><a href="' + esc(REPO_URL) + '" target="_blank" rel="noopener noreferrer">' + esc(REPO_URL.replace('https://', '')) + '</a>（探测与榜单实现）</li></ul>' +
       '</div></div></section>';
   }
@@ -786,7 +847,27 @@
     var f = freshnessOf(meta.dataAsOf);
     badgeEl.setAttribute('data-fresh', f.state);
     badgeEl.setAttribute('title', f.note || '数据新鲜度');
-    textEl.textContent = f.label;
+    // 主界面必须能一眼看到「数据更新到什么时候」——只给状态词不够，
+    // 访客无从判断该不该信这份数据。时间为北京时间（项目固定口径）。
+    var stamp = shortStamp(meta.dataAsOf);
+    var prefix = { fresh: '数据更新', stale: '数据延迟', expired: '数据已过期', unknown: '' }[f.state];
+    if (f.state === 'unknown' || !stamp) {
+      textEl.textContent = '暂无数据时间';
+      return;
+    }
+    textEl.textContent = (prefix ? prefix + ' ' : '') + stamp;
+  }
+
+  /** `2026-11-24 15:34:23` → `15:34`；跨天时补 `11-24 15:34`。 */
+  function shortStamp(ts) {
+    var ms = parseUtc8Ts(ts);
+    if (ms == null) return '';
+    var s = String(ts).replace('T', ' ');
+    var hhmm = s.length >= 16 ? s.slice(11, 16) : '';
+    if (!hhmm) return '';
+    var day = new Date(ms).toISOString().slice(0, 10);      // UTC+8 那一刻的日期
+    var today = new Date(nowUtc8Ms()).toISOString().slice(0, 10);
+    return day === today ? hhmm : day.slice(5) + ' ' + hhmm;
   }
 
   function initTheme() {

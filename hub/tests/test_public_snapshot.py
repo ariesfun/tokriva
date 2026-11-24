@@ -164,6 +164,29 @@ class PublicSnapshotTest(unittest.TestCase):
         snap = self._build(probes_limit=50)
         self.assertEqual(scan_payload(snap), [])
 
+    def test_matrix_layers_carry_only_visitor_fields(self):
+        """矩阵各层必须被收窄到访客白名单。
+
+        为什么单独立一条：`scan_payload` 只拦**已知**的坏词，而层的**多出来的字段**
+        本身就该被删掉——首版上线时 `l3.reason` 里躺着 `NOT_CONFIGURED`（凭据态的内部名），
+        结构化字段 `hasKey` 明明剥掉了，同一信息却从这个散文口子漏给了访客。
+        白名单是正向的，所以这里断言的是「集合相等」，不是「不含某几个坏字段」。
+        """
+        snap = self._build(probes_limit=50)
+        seen = 0
+        for win, blk in (snap.get("overview") or {}).items():
+            for row in (blk or {}).get("matrix") or []:
+                layers = row.get("layers") or {}
+                for key, keep in public_snapshot._LAYER_KEEP.items():
+                    layer = layers.get(key)
+                    if not isinstance(layer, dict):
+                        continue
+                    seen += 1
+                    extra = set(layer) - set(keep)
+                    self.assertFalse(
+                        extra, f"窗口 {win} 的 {key} 多出访客不该看到的字段：{sorted(extra)}")
+        self.assertGreater(seen, 0, "没走到断言路径——layers 结构变了，本用例需同步更新")
+
     def test_probe_projection_drops_bodies_and_egress(self):
         snap = self._build(probes_limit=50)
         items = snap["probes"]["items"]
