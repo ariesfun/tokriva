@@ -1,0 +1,45 @@
+{
+ "name": "lightvela_reasoning_starved",
+ "status": 200,
+ "headers": {
+  "Date": "Sun, 22 Nov 2026 01:12:55 GMT",
+  "Content-Type": "text/event-stream",
+  "Transfer-Encoding": "chunked",
+  "Connection": "keep-alive",
+  "Cache-Control": "no-cache",
+  "X-Oneapi-Request-Id": "202611220112545814984378268d9d6NbGnA1D9"
+ },
+ "chunks": [
+  [
+   0,
+   "data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"The\"}}],\"created\":1795309975,\"id\":\"fada9c88-64ee-48c7-bc41-b59c6a206750\",\"model\":\"glm-5.3-flash\",\"object\":\"chat.completion.chunk\"}\n\n"
+  ],
+  [
+   0,
+   "data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" user\"}}],\"created\":1795309975,\"id\":\"fada9c88-64ee-48c7-bc41-b59c6a206750\",\"model\":\"glm-5.3-flash\",\"object\":\"chat.completion.chunk\"}\n\n"
+  ],
+  [
+   0,
+   "data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" is\"}}],\"created\":1795309975,\"id\":\"fada9c88-64ee-48c7-bc41-b59c6a206750\",\"model\":\"glm-5.3-flash\",\"object\":\"chat.completion.chunk\"}\n\ndata: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" asking\"}}],\"created\":1795309975,\"id\":\"fada9c88-64ee-48c7-bc41-b59c6a206750\",\"model\":\"glm-5.3-flash\",\"object\":\"chat.completion.chunk\"}\n\ndata: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" me\"}}],\"created\":1795309975,\"id\":\"fada9c88-64ee-48c7-bc41-b59c6a206750\",\"model\":\"glm-5.3-flash\",\"object\":\"chat.completion.chunk\"}\n\n"
+  ],
+  [
+   46,
+   "data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" to\"}}],\"created\":1795309975,\"id\":\"fada9c88-64ee-48c7-bc41-b59c6a206750\",\"model\":\"glm-5.3-flash\",\"object\":\"chat.completion.chunk\"}\n\n"
+  ],
+  [
+   46,
+   "data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\" just say\"}}],\"created\":1795309975,\"id\":\"fada9c88-64ee-48c7-bc41-b59c6a206750\",\"model\":\"glm-5.3-flash\",\"object\":\"chat.completion.chunk\"}\n\n"
+  ],
+  [
+   53,
+   "data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"},\"finish_reason\":\"length\"}],\"created\":1795309975,\"id\":\"fada9c88-64ee-48c7-bc41-b59c6a206750\",\"model\":\"glm-5.3-flash\",\"object\":\"chat.completion.chunk\",\"usage\":{\"prompt_tokens\":14,\"completion_tokens\":8,\"total_tokens\":22,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{\"reasoning_tokens\":7}}}\n\ndata: [DONE]\n\n"
+  ]
+ ],
+ "source": {
+  "endpoint": "LightVela",
+  "model": "auto",
+  "max_tokens": 8,
+  "captured_at": "2026-11-22T09:12:58",
+  "note": "真实抓包回放；凭证与请求头未保存"
+ }
+}

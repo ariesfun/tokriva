@@ -1,4 +1,4 @@
-# Byte-compiled / optimized
+# Python
 __pycache__/
 *.py[cod]
 *.egg-info/
@@ -14,19 +14,26 @@ npm-debug.log*
 .env.*
 !.env.example
 
-# Build / cache
+# 运行时数据（绝不入库）
+data/
+*.db
+*.db-*
+*.sqlite
+*.csv
+logs/
+*.log
+
+# 构建产物 / 缓存
 dist/
 build/
 .cache/
-*.log
+
+# 本地备份与笔记
+.wb-backup/
+references/
 
 # Editor / OS
 .vscode/
 .idea/
 .DS_Store
 Thumbs.db
-
-# Data dumps (never commit collected snapshots)
-data/
-*.sqlite
-*.db

@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="color-scheme" content="light dark" />
+  <meta name="description" content="Tokriva · 免费 AI 接口的测试与排名" />
+  <title>Tokriva · AI 接口监控台</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- ============ 图标精灵 ============ -->
+  <svg class="icon-sprite" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+    <symbol fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></symbol>
+    <symbol fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" id="i-server" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="7" rx="1.5"/><rect x="3" y="13" width="18" height="7" rx="1.5"/><path d="M7 7.5h.01M7 16.5h.01M11 7.5h6M11 16.5h6"/></symbol>
+    <symbol fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" id="i-activity" viewBox="0 0 24 24"><path d="M3 12h4l3-8 4 16 3-8h4"/></symbol>
+    <symbol fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" id="i-rank" viewBox="0 0 24 24"><path d="M2 20h20v2H2zM4 10h3v9H4zM10 4h3v15h-3zM16 12h3v7h-3z"/></symbol>
+    <symbol fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" id="i-catalog" viewBox="0 0 24 24"><path d="M8 4h11a2 2 0 0 1 2 2v14H8a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z"/><path d="M6 6a2 2 0 0 0-2 2v12h14M10 9h7M10 13h7M10 17h4"/></symbol>
+    <symbol fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></symbol>
+    <symbol fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+    <symbol fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" id="i-moon" viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></symbol>
+    <symbol fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></symbol>
+    <symbol fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 6.7"/><path d="M20 4v7h-7"/></symbol>
+    <symbol id="i-menu" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+    <symbol fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" id="i-chevron-right" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></symbol>
+    <symbol id="i-panel-close" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2.5"/><path d="M9.5 3v18"/><path d="m16.5 15-3-3 3-3"/></symbol>
+    <symbol id="i-panel-open" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2.5"/><path d="M9.5 3v18"/><path d="m14 9 3 3-3 3"/></symbol>
+    <symbol fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" id="i-collapse" viewBox="0 0 24 24"><rect x="6" y="4" width="3.5" height="16" rx="1"/><rect x="14.5" y="4" width="3.5" height="16" rx="1"/></symbol>
+    <symbol fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" id="i-chevron-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+    <symbol fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" id="i-download" viewBox="0 0 24 24"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></symbol>
+    <symbol fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" id="i-external" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></symbol>
+    <symbol fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" id="i-command" viewBox="0 0 24 24"><path d="M9 6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V6Z"/></symbol>
+    <symbol fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+    <symbol fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" id="i-zap" viewBox="0 0 24 24"><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8Z"/></symbol>
+    <symbol fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" id="i-shield" viewBox="0 0 24 24"><path d="M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6l-8-3Z"/><path d="m9 12 2 2 4-4"/></symbol>
+    <symbol fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" id="i-filter" viewBox="0 0 24 24"><path d="M4 5h16l-6 7v6l-4 2v-8L4 5Z"/></symbol>
+    <symbol fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></symbol>
+    <symbol fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h8"/></symbol>
+    <symbol fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" id="i-bell" viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></symbol>
+  </svg>
+
+  <div class="app-shell">
+    <!-- ============ 侧边栏 ============ -->
+    <aside class="sidebar" id="sidebar" aria-label="主导航">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 32 32" fill="none"><path d="M3 17h6l3-9 5 18 4-11 3 4h5" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </span>
+        <span class="brand-text">
+          <strong>Tokriva</strong>
+          <small>AI 接口监控台</small>
+        </span>
+        <button class="icon-btn sidebar-collapse" id="sidebarCollapse" aria-label="折叠/展开菜单" title="折叠/展开菜单"><svg class="ico-close"><use href="#i-panel-close"/></svg><svg class="ico-open"><use href="#i-panel-open"/></svg></button>
+        <button class="icon-btn sidebar-close" id="sidebarClose" aria-label="关闭菜单"><svg><use href="#i-close"/></svg></button>
+      </div>
+
+      <nav class="nav" id="nav">
+        <div class="nav-group">
+          <div class="nav-label">工作台</div>
+          <a class="nav-item is-active" href="#overview" data-view="overview"><svg><use href="#i-grid"/></svg><span>总览</span></a>
+          <a class="nav-item" href="#endpoints" data-view="endpoints"><svg><use href="#i-server"/></svg><span>接口清单</span><span class="nav-count" id="navCountEndpoints">3</span></a>
+          <a class="nav-item" href="#rankings" data-view="rankings"><svg><use href="#i-rank"/></svg><span>排名榜单</span></a>
+          <a class="nav-item" href="#catalog" data-view="catalog"><svg><use href="#i-catalog"/></svg><span>接入条件</span></a>
+          <a class="nav-item" href="#probes" data-view="probes"><svg><use href="#i-activity"/></svg><span>测试记录</span><span class="nav-count" id="navCountProbes">30</span></a>
+          <a class="nav-item" href="#reminders" data-view="reminders"><svg><use href="#i-bell"/></svg><span>提醒中心</span><span class="nav-count" id="navCountReminders">0</span></a>
+          <a class="nav-item" href="#settings" data-view="settings"><svg><use href="#i-gear"/></svg><span>设置</span></a>
+        </div>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="sync-card">
+          <div class="sync-top"><span class="status-dot ok"></span><span>数据已同步</span></div>
+          <div class="sync-meta"><span id="syncTime">2026-11-21 16:19</span></div>
+        </div>
+        <div class="sidebar-user">
+          <span class="avatar">TF</span>
+          <span class="user-meta"><strong>Tokriva</strong><small>本地服务 · 单人使用</small></span>
+        </div>
+      </div>
+    </aside>
+    <div class="scrim" id="scrim" hidden></div>
+
+    <!-- ============ 主区域 ============ -->
+    <div class="main-wrap">
+      <header class="topbar">
+        <button class="icon-btn hamburger" id="hamburger" aria-label="打开菜单"><svg><use href="#i-menu"/></svg></button>
+        <div class="breadcrumb">
+          <span>工作台</span><svg class="sep"><use href="#i-chevron-right"/></svg><strong id="crumbCurrent">总览</strong>
+        </div>
+        <div class="topbar-actions">
+          <button class="search-trigger" id="searchTrigger" aria-label="搜索或跳转">
+            <svg><use href="#i-search"/></svg>
+            <span>搜索或跳转…</span>
+            <kbd id="kbdShortcut">⌘ K</kbd>
+          </button>
+          <button class="icon-btn" id="themeToggle" aria-label="切换主题" title="切换主题"><svg><use href="#i-sun"/></svg></button>
+          <button class="icon-btn" id="refreshBtn" aria-label="刷新数据" title="刷新数据"><svg><use href="#i-refresh"/></svg></button>
+          <span class="topbar-divider"></span>
+          <button class="icon-btn" id="notifyBtn" aria-label="通知" title="通知"><svg><use href="#i-bell"/></svg></button>
+        </div>
+      </header>
+
+      <main class="content" id="content" tabindex="-1">
+        <!-- 视图由 app.js 渲染 -->
+      </main>
+    </div>
+  </div>
+
+  <!-- ============ 详情抽屉 ============ -->
+  <div class="drawer-overlay" id="drawerOverlay" hidden></div>
+  <aside class="detail-drawer" id="detailDrawer" aria-label="接口详情" hidden></aside>
+
+  <!-- ============ 命令面板 ============ -->
+  <div class="cmdk-overlay" id="cmdkOverlay" hidden>
+    <div class="cmdk" role="dialog" aria-modal="true" aria-label="命令面板">
+      <div class="cmdk-input-wrap">
+        <svg><use href="#i-search"/></svg>
+        <input id="cmdkInput" type="text" placeholder="输入视图名称或命令…" autocomplete="off" />
+        <kbd>ESC</kbd>
+      </div>
+      <div class="cmdk-list" id="cmdkList"></div>
+      <div class="cmdk-footer"><span><kbd>↑</kbd><kbd>↓</kbd> 选择</span><span><kbd>↵</kbd> 打开</span><span><kbd>esc</kbd> 关闭</span></div>
+    </div>
+  </div>
+
+  <!-- ============ Toast ============ -->
+  <div class="toast-stack" id="toastStack" aria-live="polite"></div>
+
+  <script src="data.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

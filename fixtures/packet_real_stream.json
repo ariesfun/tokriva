@@ -1,0 +1,100 @@
+{
+ "name": "packet_real_stream",
+ "status": 200,
+ "headers": {
+  "Date": "Sun, 22 Nov 2026 01:13:37 GMT",
+  "Content-Type": "text/event-stream",
+  "Transfer-Encoding": "chunked",
+  "Connection": "keep-alive",
+  "access-control-allow-headers": "Content-Type, Authorization",
+  "access-control-allow-methods": "GET, POST, PUT, DELETE, OPTIONS",
+  "access-control-allow-origin": "*",
+  "Cache-Control": "no-cache",
+  "request-id": "req-6389342f-76d5-4da2-bf14-167b3e68307d",
+  "x-elapsed-ms": "863",
+  "x-request-id": "req-6389342f-76d5-4da2-bf14-167b3e68307d",
+  "cf-cache-status": "DYNAMIC",
+  "Report-To": "{\"group\":\"cf-nel\",\"max_age\":604800,\"endpoints\":[{\"url\":\"https://a.nel.cloudflare.com/report/v4?s=2mt3w6vgiVIH8I5lpZpfuIK38ogmIpvRb%2Bfpg6VjINoaXPivEnbxmCLwQGlsE7NzbmaC%2FAfmJ7EQFawdmkbVBDV9Lhiidgpt%2Femf1voXy6UTlRGDpZNdTtb%2B4tz%2F6EM%3D\"}]}",
+  "Nel": "{\"report_to\":\"cf-nel\",\"success_fraction\":0.0,\"max_age\":604800}",
+  "Server": "cloudflare",
+  "CF-RAY": "a5e412907ccc68b1-SIN",
+  "alt-svc": "h3=\":443\"; ma=86400"
+ },
+ "chunks": [
+  [
+   0,
+   "data: {\"id\": \"chatcmpl-fdbf89fd3488439b8acb86d6825bc8a7\", \"object\": \"chat.completion.chunk\", \"created\": 1795310016, \"model\": \"nvidia-deepseek-v4-1-flash-nvfp4\", \"choices\": [{\"index\": 0, \"delta\": {\"role\": \"assistant\"}, \"finish_reason\": null}], \"usage\": null}\n\ndata: {\"id\": \"chatcmpl-fdbf89fd3488439b8acb86d6825bc8a7\", \"object\": \"chat.completion.chunk\", \"created\": 1795310017, \"model\": \"nvidia-deepseek-v4-1-flash-nvfp4\", \"choices\": [{\"index\": 0, \"delta\": {\"reasoning_content\": \"We\"}, \"finish_reason\": null}], \"usage\": null}\n\n"
+  ],
+  [
+   0,
+   "data: {\"id\": \"chatcmpl-fdbf89fd3488439b8acb86d6825bc8a7\", \"object\": \"chat.completion.chunk\", \"created\": 1795310017, \"model\": \"nvidia-deepseek-v4-1-flash-nvfp4\", \"choices\": [{\"index\": 0, \"delta\": {\"reasoning_content\": \" need\"}, \"finish_reason\": null}], \"usage\": null}\n\ndata: {\"id\": \"chatcmpl-fdbf89fd3488439b8acb86d6825bc8a7\", \"object\": \"chat.completion.chunk\", \"created\": 1795310017, \"model\": \"nvidia-deepseek-v4-1-flash-nvfp4\", \"choices\": [{\"index\": 0, \"delta\": {\"reasoning_content\": \" answer\"}, \"finish_reason\": null}], \"usage\": null}\n\n"
+  ],
+  [
+   0,
+   "data: {\"id\": \"chatcmpl-fdbf89fd3488439b8acb86d6825bc8a7\", \"object\": \"chat.completion.chunk\", \"created\": 1795310017, \"model\": \"nvidia-deepseek-v4-1-flash-nvfp4\", \"choices\": [{\"index\": 0, \"delta\": {\"reasoning_content\": \" user\"}, \"finish_reason\": null}], \"usage\": null}\n\n"
+  ],
+  [
+   0,
+   "data: {\"id\": \"chatcmpl-fdbf89fd3488439b8acb86d6825bc8a7\", \"object\": \"chat.completion.chunk\", \"created\": 1795310017, \"model\": \"nvidia-deepseek-v4-1-flash-nvfp4\", \"choices\": [{\"index\": 0, \"delta\": {\"reasoning_content\": \" says\"}, \"finish_reason\": null}], \"usage\": null}\n\n"
+  ],
+  [
+   0,
+   "data: {\"id\": \"chatcmpl-fdbf89fd3488439b8acb86d6825bc8a7\", \"object\": \"chat.completion.chunk\", \"created\": 1795310017, \"model\": \"nvidia-deepseek-v4-1-flash-nvfp4\", \"choices\": [{\"index\": 0, \"delta\": {\"reasoning_content\": \" \\\"Say\"}, \"finish_reason\": null}], \"usage\": null}\n\n"
+  ],
+  [
+   0,
+   "data: {\"id\": \"chatcmpl-fdbf89fd3488439b8acb86d6825bc8a7\", \"object\": \"chat.completion.chunk\", \"created\": 1795310017, \"model\": \"nvidia-deepseek-v4-1-flash-nvfp4\", \"choices\": [{\"index\": 0, \"delta\": {\"reasoning_content\": \" ok\"}, \"finish_reason\": null}], \"usage\": null}\n\n"
+  ],
+  [
+   0,
+   "data: {\"id\": \"chatcmpl-fdbf89fd3488439b8acb86d6825bc8a7\", \"object\": \"chat.completion.chunk\", \"created\": 1795310017, \"model\": \"nvidia-deepseek-v4-1-flash-nvfp4\", \"choices\": [{\"index\": 0, \"delta\": {\"reasoning_content\": \"\\\".\"}, \"finish_reason\": null}], \"usage\": null}\n\n"
+  ],
+  [
+   0,
+   "data: {\"id\": \"chatcmpl-fdbf89fd3488439b8acb86d6825bc8a7\", \"object\": \"chat.completion.chunk\", \"created\": 1795310017, \"model\": \"nvidia-deepseek-v4-1-flash-nvfp4\", \"choices\": [{\"index\": 0, \"delta\": {\"reasoning_content\": \" Need\"}, \"finish_reason\": null}], \"usage\": null}\n\n"
+  ],
+  [
+   0,
+   "data: {\"id\": \"chatcmpl-fdbf89fd3488439b8acb86d6825bc8a7\", \"object\": \"chat.completion.chunk\", \"created\": 1795310017, \"model\": \"nvidia-deepseek-v4-1-flash-nvfp4\", \"choices\": [{\"index\": 0, \"delta\": {\"reasoning_content\": \" just\"}, \"finish_reason\": null}], \"usage\": null}\n\ndata: {\"id\": \"chatcmpl-fdbf89fd3488439b8acb86d6825bc8a7\", \"object\": \"chat.completion.chunk\", \"created\": 1795310017, \"model\": \"nvidia-deepseek-v4-1-flash-nvfp4\", \"choices\": [{\"index\": 0, \"delta\": {\"reasoning_content\": \" say\"}, \"finish_reason\": null}], \"usage\": null}\n\n"
+  ],
+  [
+   0,
+   "data: {\"id\": \"chatcmpl-fdbf89fd3488439b8acb86d6825bc8a7\", \"object\": \"chat.completion.chunk\", \"created\": 1795310017, \"model\": \"nvidia-deepseek-v4-1-flash-nvfp4\", \"choices\": [{\"index\": 0, \"delta\": {\"reasoning_content\": \" ok\"}, \"finish_reason\": null}], \"usage\": null}\n\n"
+  ],
+  [
+   0,
+   "data: {\"id\": \"chatcmpl-fdbf89fd3488439b8acb86d6825bc8a7\", \"object\": \"chat.completion.chunk\", \"created\": 1795310017, \"model\": \"nvidia-deepseek-v4-1-flash-nvfp4\", \"choices\": [{\"index\": 0, \"delta\": {\"reasoning_content\": \".\"}, \"finish_reason\": null}], \"usage\": null}\n\n"
+  ],
+  [
+   0,
+   "data: {\"id\": \"chatcmpl-fdbf89fd3488439b8acb86d6825bc8a7\", \"object\": \"chat.completion.chunk\", \"created\": 1795310017, \"model\": \"nvidia-deepseek-v4-1-flash-nvfp4\", \"choices\": [{\"index\": 0, \"delta\": {\"reasoning_content\": \" Must\"}, \"finish_reason\": null}], \"usage\": null}\n\n"
+  ],
+  [
+   0,
+   "data: {\"id\": \"chatcmpl-fdbf89fd3488439b8acb86d6825bc8a7\", \"object\": \"chat.completion.chunk\", \"created\": 1795310017, \"model\": \"nvidia-deepseek-v4-1-flash-nvfp4\", \"choices\": [{\"index\": 0, \"delta\": {\"reasoning_content\": \" comply\"}, \"finish_reason\": null}], \"usage\": null}\n\n"
+  ],
+  [
+   0,
+   "data: {\"id\": \"chatcmpl-fdbf89fd3488439b8acb86d6825bc8a7\", \"object\": \"chat.completion.chunk\", \"created\": 1795310017, \"model\": \"nvidia-deepseek-v4-1-flash-nvfp4\", \"choices\": [{\"index\": 0, \"delta\": {\"reasoning_content\": \".\"}, \"finish_reason\": null}], \"usage\": null}\n\n"
+  ],
+  [
+   0,
+   "data: {\"id\": \"chatcmpl-fdbf89fd3488439b8acb86d6825bc8a7\", \"object\": \"chat.completion.chunk\", \"created\": 1795310017, \"model\": \"nvidia-deepseek-v4-1-flash-nvfp4\", \"choices\": [{\"index\": 0, \"delta\": {\"content\": \"ok\"}, \"finish_reason\": null}], \"usage\": null}\n\n"
+  ],
+  [
+   204,
+   "data: {\"id\": \"chatcmpl-fdbf89fd3488439b8acb86d6825bc8a7\", \"object\": \"chat.completion.chunk\", \"created\": 1795310017, \"model\": \"nvidia-deepseek-v4-1-flash-nvfp4\", \"choices\": [{\"index\": 0, \"delta\": {}, \"finish_reason\": \"stop\"}], \"usage\": null}\n\ndata: {\"id\": \"chatcmpl-fdbf89fd3488439b8acb86d6825bc8a7\", \"object\": \"chat.completion.chunk\", \"created\": 1795310017, \"model\": \"nvidia-deepseek-v4-1-flash-nvfp4\", \"choices\": [], \"usage\": {\"prompt_tokens\": 32, \"completion_tokens\": 20, \"total_tokens\": 52, \"prompt_tokens_details\": {\"cached_tokens\": 0}}}\n\ndata: [DONE]\n\n"
+  ],
+  [
+   204,
+   "data: {\"choices\":[{\"delta\":{\"hai_timing\":{\"output_tokens_per_s\":19.95,\"restore_s\":\"0\",\"runtime_state\":\"running-replica\",\"total_ms\":1002,\"ttft_ms\":790,\"upstream_latency_ms\":722,\"wake_s\":\"0\"}},\"index\":0}],\"object\":\"chat.completion.chunk\"}\n\n"
+  ]
+ ],
+ "source": {
+  "endpoint": "Packet",
+  "model": "nvidia-deepseek-v4-1-flash-nvfp4",
+  "max_tokens": 64,
+  "captured_at": "2026-11-22T09:13:41",
+  "note": "真实抓包回放；凭证与请求头未保存"
+ }
+}
