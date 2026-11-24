@@ -148,8 +148,9 @@ class PublicSnapshotTest(unittest.TestCase):
         for it in items:
             for bad in ("error_body", "resp_body", "request_json", "resp_headers", "egress"):
                 self.assertNotIn(bad, it)
-        # 标准化的错误分类要保留（供公开页展示"错误原因"）
-        self.assertIn("errorKind", items[0])
+        # 标准化的错误分类要保留（供公开页展示"错误原因"）。
+        # 命名照抄库列名（snake_case），见 docs/public-data-policy.md §2.0。
+        self.assertIn("error_kind", items[0])
 
     def test_endpoint_projection_drops_credentials(self):
         snap = self._build(probes_limit=50)

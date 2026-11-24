@@ -21,8 +21,8 @@
 
 用法
 ----
-    python -m hub.public_snapshot                    # → dist/snapshot.json
-    python -m hub.public_snapshot --out dist
+    python -m hub.public_snapshot                    # → dist/public/snapshot.json
+    python -m hub.public_snapshot --out dist/public
     python -m hub.public_snapshot --probes 500
     python -m hub.public_snapshot --window 1,6,24,168,720
     python -m hub.public_snapshot --scan-only        # 只跑敏感扫描，不落盘
@@ -138,31 +138,37 @@ def scan_payload(payload: Any) -> list[dict[str, str]]:
 # 各接口的白名单投影
 # ---------------------------------------------------------------------------
 def _probe_row(r: dict) -> dict:
-    """探测明细的正向白名单投影（排除正文 / 请求体 / 响应头 / 出口路径）。"""
+    """探测明细的正向白名单投影（排除正文 / 请求体 / 响应头 / 出口路径）。
+
+    命名约定（见 `docs/public-data-policy.md` §2.0）：**照抄库中列名**（snake_case）。
+    探测行是最贴近原始数据的部分，保留 snake_case 可让三者同名——
+    库列、CSV 兜底快照 `data.js`、前端 `normalizeRows`——从而少一层适配。
+    派生 / 聚合字段（`endpoints`、`rankings`）才用 camelCase。
+    """
     return {
         "created_at": r["created_at"],
         "endpoint": r["endpoint"],
         "level": r["level"],
-        "modelId": r["model_id"],
-        "model": r.get("model_display") or r["model_id"],
+        "model_id": r["model_id"],
+        "model_display": r.get("model_display") or r["model_id"],
         "status": r["status"],
-        "httpStatus": r["http_status"],
-        "dnsMs": _n(r["dns_ms"]),
-        "tcpMs": _n(r["tcp_ms"]),
-        "tlsMs": _n(r["tls_ms"]),
-        "ttfbMs": _n(r["ttfb_ms"]),
-        "ttftMs": _n(r["ttft_ms"]),
-        "outputTokens": r["output_tokens"],
+        "http_status": r["http_status"],
+        "dns_ms": _n(r["dns_ms"]),
+        "tcp_ms": _n(r["tcp_ms"]),
+        "tls_ms": _n(r["tls_ms"]),
+        "ttfb_ms": _n(r["ttfb_ms"]),
+        "ttft_ms": _n(r["ttft_ms"]),
+        "output_tokens": r["output_tokens"],
         "tps": _n(r["tps"], 2),
-        "totalMs": _n(r["total_ms"]),
-        "streamMode": r["stream_mode"],
-        "servedModel": r["served_model"],
-        "tokenSource": r["token_source"],
-        "errorKind": r["error_kind"],          # 标准化分类，非响应原文
-        "responseShape": r["response_shape"],
-        "reasoningTokens": r["reasoning_tokens"],
-        "retryAfter": r["retry_after"],
-        "costUsd": r["cost_usd"],
+        "total_ms": _n(r["total_ms"]),
+        "stream_mode": r["stream_mode"],
+        "served_model": r["served_model"],
+        "token_source": r["token_source"],
+        "error_kind": r["error_kind"],         # 标准化分类，非响应原文
+        "response_shape": r["response_shape"],
+        "reasoning_tokens": r["reasoning_tokens"],
+        "retry_after": r["retry_after"],
+        "cost_usd": r["cost_usd"],
     }
 
 
@@ -184,7 +190,7 @@ def _probes(conn, limit: int) -> dict:
 def _endpoints(conn) -> dict:
     rows = [dict(r) for r in conn.execute(
         "SELECT e.id, e.label, e.protocol, e.default_model, e.active, "
-        "       p.name provider, p.website, p.kind, p.provider_status "
+        "       p.name provider, p.website, p.kind "
         "FROM endpoint e LEFT JOIN provider p ON p.id=e.provider_id "
         "ORDER BY e.id")]
     out: list[dict] = []
@@ -217,7 +223,8 @@ def _endpoints(conn) -> dict:
             "protocol": r["protocol"],
             "defaultModel": (dm["display_name"] if dm and dm["display_name"] else r["default_model"]),
             "active": bool(r["active"]),
-            "status": r["provider_status"],
+            # provider_status 不公开：实测取值恒为 'UNKNOWN'（零信息量），
+            # 不在政策白名单内，前端也不消费。正向白名单下"没登记"即"不公开"。
             "availability": round(stats["healthy"] / stats["n"] * 100, 1) if stats["n"] else 0.0,
             "probeCount": stats["n"],
             "lastProbeAt": stats["last_at"],
@@ -332,13 +339,18 @@ def _rankings(conn, scene: str) -> dict:
     return _summarize_excluded(payload)   # excluded 明细 -> 聚合摘要
 
 
-def _meta(conn, probes_limit: int, windows: Iterable[int]) -> dict:
+def _meta(conn, probes_limit: int) -> dict:
+    """契约元信息。窗口列表只放**顶层** `windows`（§1），此处不再重复。
+
+    `endpointsCount` = 公开端点清单条数（与 `data.endpoints.items` 等长），
+    供公开页写"共监控 N 个接口"之类的话术；细化到活跃/在线的口径由总览给出。
+    """
     return {
         "probeSource": "tokriva 本机探测（出口固定，历史可比）",
         "timezone": "Asia/Shanghai",
         "policyVersion": POLICY_VERSION,
         "probesLimit": probes_limit,
-        "windows": list(windows),
+        "endpointsCount": conn.execute("SELECT COUNT(*) FROM endpoint").fetchone()[0],
         "modelCount": conn.execute(
             "SELECT COUNT(DISTINCT model_id) FROM model "
             "WHERE status='ACTIVE' AND COALESCE(is_chat,1)=1").fetchone()[0],
@@ -353,7 +365,7 @@ def build_public(conn, probes_limit: int = DEFAULT_PROBES,
     """在给定连接上构建公开快照（纯读取，无副作用）。"""
     windows = list(windows)
     data: dict[str, Any] = {
-        "meta": _meta(conn, probes_limit, windows),
+        "meta": _meta(conn, probes_limit),
         "health": _health(conn),
         "endpoints": _endpoints(conn),
         "probes": _probes(conn, probes_limit),

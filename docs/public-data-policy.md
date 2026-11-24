@@ -37,11 +37,24 @@
 
 ## 2. 字段白名单（逐接口）
 
+### 2.0 命名约定（先读这条）
+
+公开契约有两类字段，**命名风格刻意不同**：
+
+| 类别 | 风格 | 理由 |
+|---|---|---|
+| **原始行投影**（`probes.items[]`） | **snake_case**，与库列同名 | 让「库列 / CSV 兜底快照 `data.js` / 前端 `normalizeRows`」三者同名，少一层适配 |
+| **派生 / 聚合字段**（`endpoints`、`rankings`、`meta` 等） | **camelCase** | 这些不是原始行，是构建期算出来的展示字段 |
+
+因此探针行是 `model_id` / `http_status` / `error_kind` / `ttft_ms`，而端点清单是
+`defaultModel` / `probeCount` / `lastProbeAt` / `ttftP50`。**新增字段时照此归类，
+不要在两处混用同一种风格。**
+
 ### 2.1 `data.endpoints.items[]` — 端点清单
 
 **公开（白名单）：**
 
-`label`、`provider`、`website`、`kind`、`protocol`、`defaultModelDisplay`、
+`label`、`provider`、`website`、`kind`、`protocol`、`defaultModel`、
 `active`、`availability`（%）、`probeCount`、`lastProbeAt`、`ttftP50`、`tpsAvg`、
 `contextMax`、`modelCount`、`quotaSource`。
 
@@ -53,7 +66,10 @@
 - `note` —— 运维备注，可能夹带内网信息；
 - `dailyBudget` / `budgetToday` / `budgetRemaining` / `budgetState` / `budgetReason`
   / `budgetEnabled` / `quotaUsedPct` —— 本机探测预算与闸门细节，属运维内部量；
-- `id` —— 内部主键，公开站用 `label` 标识。
+- `id` —— 内部主键，公开站用 `label` 标识；
+- `status`（= 上游 `provider.status`）—— 实测取值恒为 `UNKNOWN`，**零信息量**，
+  又不属任何公开语义；正向白名单下「没登记」即「不公开」。真实可用性由
+  `availability`（本机实测百分比）与总览给出。
 
 ### 2.2 `data.probes.items[]` — 最近探测明细（上限 500 条）
 
@@ -113,7 +129,10 @@
 ### 2.8 `data.meta`
 
 `probeSource`（公开来源说明）、`timezone`（`Asia/Shanghai`）、`probesLimit`、
-`endpointsCount`、`modelCount`、`policyVersion`。
+`endpointsCount`（公开端点清单条数，与 `data.endpoints.items` 等长）、
+`modelCount`、`policyVersion`。
+
+> 采用的 overview 窗口列表只在**顶层** `windows`（§1）出现一次，`meta` 内不再重复。
 
 ---
 
