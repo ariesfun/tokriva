@@ -166,12 +166,11 @@
   }
 
   // 解析快照里的本地时间串（"YYYY-MM-DD HH:MM:SS"，无时区）。
-  // 项目口径：全栈用运行机器本地时间、前端不做时区换算 → 按浏览器本地时间解析。
-  function parseLocalTs(ts) {
-    if (!ts) return null;
-    var d = new Date(String(ts).replace(' ', 'T'));
-    return isNaN(d.getTime()) ? null : d;
-  }
+  // ⚠️ **已废弃，勿再新增调用**：本项目只认**一个时间帧**（帧 B，见 `parseUtc8Ts`）。
+  // 这里曾经按**浏览器本地时间**解析，与 UTC+8 口径并列存在——正是「多套时间帧并存」
+  // 的温床（时间帧不一致的那次线上事故就是这么来的）。它唯一的调用处只取**差值**
+  // （相邻探测间隔），差值本身与帧无关，故直接改用 `parseUtc8Ts` 即可，行为不变。
+  // 保留此注释是为了让后来者知道：**别在这里重建第二个解析器**。
 
   // 数据新鲜度（报告 §16.2：≤90min fresh / 90–180 stale / >180 expired）
   // 项目时间口径**固定 Asia/Shanghai（UTC+8）**：库里的时间戳都是北京时间墙上时间，
@@ -688,18 +687,60 @@
 
   /* ================= 视图：方法说明 ================= */
 
+  /* 由探测记录估算**轮次间隔**（分钟）。判不出就返回 null，页面显示 —。
+
+     为什么不能直接取「相邻记录间隔的中位数」：同一轮探测会并发写多条
+     （多端点 × 多模型），它们在几秒内落库，于是**相邻间隔绝大多数是 1–3 秒**，
+     中位数直接落进簇内 → 页面上显示出「约每 0 分钟一轮」这种废话。
+     真实轮间隔在**簇与簇之间**，比簇内大一到两个数量级。
+
+     做法：把间隔排序后找**最大比值跳变**，它天然落在「簇内/簇间」的
+     空档里（只要轮间隔明显大于簇内抖动）。此判据**不含任何写死的秒数**——
+     不假设探测频率是 30 分钟，换调度也不用改这里。
+     幂等：算不出「至少 1 分钟」就返回 null，绝不拿 0 去糊弄访客。 */
+  /* 由探测记录估算**轮次间隔**（分钟）。判不出就返回 null，页面显示 —。
+
+     为什么不能直接取「相邻记录间隔的中位数」：同一轮探测会并发写多条
+     （多端点 × 多模型），它们在几秒内落库，于是**相邻间隔绝大多数是 1–3 秒**，
+     中位数直接落进簇内 → 页面上显示出「约每 0 分钟一轮」这种废话。
+     真实轮间隔在**簇与簇之间**，比簇内大一到两个数量级。
+
+     做法：把间隔排序后找**最大比值跳变**，它天然落在「簇内/簇间」的
+     空档里（只要轮间隔明显大于簇内抖动）。此判据**不含任何写死的秒数**——
+     不假设探测频率是 30 分钟，换调度也不用改这里。
+     幂等：算不出「至少 1 分钟」就返回 null，绝不拿 0 去糊弄访客。 */
   function estimateIntervalMin(items) {
-    var ts = items.map(function (p) { return parseLocalTs(p.created_at); })
-      .filter(function (d) { return d; })
-      .map(function (d) { return d.getTime(); })
+    var ts = items.map(function (p) { return parseUtc8Ts(p.created_at); })
+      .filter(function (n) { return n != null; })
       .sort(function (a, b) { return a - b; });
     if (ts.length < 3) return null;
+
     var gaps = [];
     for (var i = 1; i < ts.length; i++) { var g = ts[i] - ts[i - 1]; if (g > 0) gaps.push(g); }
-    if (!gaps.length) return null;
+    if (gaps.length < 2) return null;
     gaps.sort(function (a, b) { return a - b; });
-    var med = gaps[Math.floor(gaps.length / 2)];
-    return Math.round(med / 60000);
+
+    // 最大比值跳变 → 切分阈值（取跳变两侧的几何平均）
+    var bestRatio = 0, cut = -1;
+    for (var j = 0; j < gaps.length - 1; j++) {
+      var r = gaps[j + 1] / gaps[j];
+      if (r > bestRatio) { bestRatio = r; cut = j; }
+    }
+    if (cut < 0 || bestRatio < 2) return null;          // 无双峰 → 判不出
+    var thr = Math.sqrt(gaps[cut] * gaps[cut + 1]);
+
+    // 按阈值聚簇：簇首即「一轮」的起始时刻
+    var starts = [ts[0]];
+    for (var k = 1; k < ts.length; k++) {
+      if (ts[k] - ts[k - 1] > thr) starts.push(ts[k]);
+    }
+    if (starts.length < 3) return null;                 // 轮次太少 → 判不出
+
+    var cycle = [];
+    for (var m = 1; m < starts.length; m++) cycle.push((starts[m] - starts[m - 1]) / 60000);
+    var med = cycle[Math.floor(cycle.length / 2)];
+    var min = Math.round(med);
+    return min >= 1 ? min : null;
   }
 
   function renderMethodology() {
