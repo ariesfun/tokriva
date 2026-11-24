@@ -5,10 +5,11 @@
     本文件              公开站（GitHub Pages）——只允许正向白名单字段出门
 
 为什么值得单测：公开站一旦上线，字段就是**对陌生人可见**的。白名单是正向的
-（上游新增字段默认不公开），所以真正需要守卫的是三件事：
+（上游新增字段默认不公开），所以真正需要守卫的是四件事：
     ① 排除项真的被排除（凭据名、base_url、响应正文、出口路径、库路径…）；
     ② canary 扫描真的会拦（注入密钥/本机路径要被抓到）；
-    ③ 全历史聚合独立于 overview 窗口，不能被 720 小时冒充。
+    ③ 全历史聚合独立于 overview 窗口，不能被 720 小时冒充；
+    ④ 构建**幂等**：库不变则数据体与 `snapshotId` 都不变（"无变化不提交"的依据）。
 """
 from __future__ import annotations
 
@@ -16,6 +17,7 @@ import json
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
@@ -24,10 +26,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from hub import api, db, public_snapshot  # noqa: E402
 from hub.public_snapshot import scan_payload  # noqa: E402
 
-# 公开快照 `data` 下必须齐备的键
-EXPECTED_KEYS = {
-    "meta", "health", "endpoints", "probes", "catalog",
-    "rankings", "overview", "allTime",
+# 公开契约**顶层**必须齐备的键（扁平结构，不套 `data.*`）。
+EXPECTED_TOP_KEYS = {
+    "schemaVersion", "meta", "overview", "rankings", "endpoints", "probes", "catalog",
+}
+# `meta` 自责块必须齐备的键（架构报告 §5.3.1 的自述字段 + 我们自加的溯源字段）。
+EXPECTED_META_KEYS = {
+    "snapshotId", "generatedAt", "dataAsOf", "timezone", "measurementScope",
+    "freshness", "samplePolicy", "policyVersion", "probeSource",
+    "windows", "endpointsCount", "modelCount",
 }
 SCENES = ("speed", "agent", "stable")
 # 绝不能出现在公开产物里的字段名（正向白名单的"反向清单"）。
@@ -36,8 +43,10 @@ SCENES = ("speed", "agent", "stable")
 NEVER_PUBLIC = (
     "authEnv", "baseUrl", "hasKey", "dailyBudget", "budgetReason",
     "error_body", "resp_body", "request_json", "resp_headers", "egress",
-    "probePrompt", "scheduler",
+    "probePrompt", "scheduler", "provider_status",
 )
+# 「现在」派生字段：会让产物每次构建都不一样，必须被 drop_volatile 剥掉。
+VOLATILE = ("generated_at", "age_sec")
 
 
 class PublicSnapshotTest(unittest.TestCase):
@@ -114,26 +123,40 @@ class PublicSnapshotTest(unittest.TestCase):
         finally:
             conn.close()
 
-    # ---------- 覆盖面 ----------
-    def test_build_covers_all_keys(self):
+    # ---------- 覆盖面 / 顶层形状 ----------
+    def test_top_level_is_flat(self):
+        """扁平契约：顶层不再有 data 嵌套、readOnly、mode。"""
         snap = self._build(probes_limit=50)
-        self.assertTrue(snap["readOnly"])
-        self.assertEqual(snap["mode"], "public")
-        self.assertEqual(snap["schema"], 1)
-        self.assertIn("generatedAt", snap)
-        self.assertIn("dataAsOf", snap)
-        self.assertEqual(set(snap["data"]), EXPECTED_KEYS)
+        self.assertEqual(set(snap), EXPECTED_TOP_KEYS)
+        for gone in ("data", "readOnly", "mode", "health", "allTime", "windows"):
+            self.assertNotIn(gone, snap, f"顶层不应再有 {gone}")
 
-    def test_default_windows_and_alltime_present(self):
+    def test_meta_is_self_describing(self):
         snap = self._build(probes_limit=50)
-        self.assertEqual(set(snap["data"]["overview"]),
-                         {str(w) for w in public_snapshot.WINDOWS})
-        self.assertIn("allTime", snap["data"])
+        self.assertEqual(set(snap["meta"]), EXPECTED_META_KEYS)
+        self.assertEqual(snap["schemaVersion"], 1)
+        self.assertEqual(snap["meta"]["timezone"], "Asia/Shanghai")
+        self.assertEqual(snap["meta"]["measurementScope"], "single-origin-network")
+        self.assertIn(snap["meta"]["freshness"], {"fresh", "stale", "expired", "unknown"})
+
+    def test_default_windows_and_alltime_merged_into_overview(self):
+        snap = self._build(probes_limit=50)
+        self.assertEqual(set(snap["overview"]),
+                         {str(w) for w in public_snapshot.WINDOWS} | {"allTime"})
+        # allTime 与窗口同构于 overview，不再单列顶层键
+        self.assertIn("totalProbes", snap["overview"]["allTime"])
 
     def test_rankings_are_populated(self):
         snap = self._build(probes_limit=50)
         for scene in SCENES:
-            self.assertGreater(len(snap["data"]["rankings"][scene]["items"]), 0, scene)
+            self.assertGreater(len(snap["rankings"][scene]["items"]), 0, scene)
+
+    def test_endpoints_expose_public_id_and_status(self):
+        """公开 ID 是名字派生的 slug，不是库内主键；状态由 active 派生。"""
+        it = self._build(probes_limit=50)["endpoints"]["items"][0]
+        self.assertEqual(it["providerId"], "ep-a")
+        self.assertEqual(it["publicStatus"], "ACTIVE")
+        self.assertNotIn("provider_status", it)
 
     # ---------- 白名单守卫：该排除的一项都不能漏 ----------
     def test_structural_scan_finds_nothing(self):
@@ -143,7 +166,7 @@ class PublicSnapshotTest(unittest.TestCase):
 
     def test_probe_projection_drops_bodies_and_egress(self):
         snap = self._build(probes_limit=50)
-        items = snap["data"]["probes"]["items"]
+        items = snap["probes"]["items"]
         self.assertTrue(items)
         for it in items:
             for bad in ("error_body", "resp_body", "request_json", "resp_headers", "egress"):
@@ -154,29 +177,31 @@ class PublicSnapshotTest(unittest.TestCase):
 
     def test_endpoint_projection_drops_credentials(self):
         snap = self._build(probes_limit=50)
-        items = snap["data"]["endpoints"]["items"]
+        items = snap["endpoints"]["items"]
         self.assertEqual(len(items), 1)
         for bad in ("authEnv", "baseUrl", "hasKey", "note", "dailyBudget"):
             self.assertNotIn(bad, items[0])
         # 该公开的保留
-        for good in ("label", "provider", "availability", "probeCount", "quotaSource"):
+        for good in ("providerId", "label", "provider", "availability",
+                     "probeCount", "quotaSource", "publicStatus"):
             self.assertIn(good, items[0])
 
-    def test_health_drops_db_path_and_scheduler(self):
-        h = self._build(probes_limit=5)["data"]["health"]
-        self.assertNotIn("db", h)
-        self.assertNotIn("scheduler", h)
-        self.assertEqual(set(h), {"ok", "probeRows", "latestProbeAt"})
+    def test_raw_health_not_exported(self):
+        """原始 health 不进公开快照（报告 §5.3.7）；只保留 meta 里的公开状态。"""
+        snap = self._build(probes_limit=5)
+        self.assertNotIn("health", snap)
+        self.assertNotIn("db", snap["meta"])
+        self.assertNotIn("scheduler", snap["meta"])
 
     def test_overview_matrix_drops_haskey(self):
         snap = self._build(probes_limit=5)
-        for ov in snap["data"]["overview"].values():
-            for m in ov.get("matrix", []):
+        for ov in snap["overview"].values():
+            for m in ov.get("matrix", []) if isinstance(ov, dict) else []:
                 self.assertNotIn("hasKey", m)
 
     def test_catalog_drops_internal_id_and_note(self):
         snap = self._build(probes_limit=5)
-        items = snap["data"]["catalog"]["items"]
+        items = snap["catalog"]["items"]
         self.assertTrue(items)
         self.assertNotIn("provider_id", items[0])
         self.assertNotIn("note", items[0])
@@ -197,20 +222,81 @@ class PublicSnapshotTest(unittest.TestCase):
 
         walk(snap)
 
+    # ---------- 幂等：库不变 → 产物不变 ----------
+    def test_build_is_idempotent_apart_from_meta(self):
+        """同一份库连构两次，除 meta 外必须逐字节一致（报告 §7.3 第 8 条）。"""
+        a, b = self._build(probes_limit=50), self._build(probes_limit=50)
+        strip = lambda s: {k: v for k, v in s.items() if k != "meta"}  # noqa: E731
+        self.assertEqual(json.dumps(strip(a), sort_keys=True, ensure_ascii=False),
+                         json.dumps(strip(b), sort_keys=True, ensure_ascii=False))
+
+    def test_no_volatile_now_derived_fields(self):
+        """`generated_at` / `age_sec` 这类「现在」派生字段必须被剥干净。"""
+        snap = self._build(probes_limit=50)
+
+        def walk(o, path="$"):
+            if isinstance(o, dict):
+                for k, v in o.items():
+                    self.assertNotIn(k, VOLATILE, f"{path}.{k} 是易变字段")
+                    walk(v, f"{path}.{k}")
+            elif isinstance(o, list):
+                for i, v in enumerate(o):
+                    walk(v, f"{path}[{i}]")
+
+        walk(snap["overview"])
+
+    def test_snapshot_id_is_stable_and_well_formed(self):
+        """`snapshotId` = 数据时点 + 本机时区偏移 + 数据体指纹；库不变则不变。"""
+        a, b = self._build(probes_limit=50), self._build(probes_limit=50)
+        sid = a["meta"]["snapshotId"]
+        self.assertEqual(sid, b["meta"]["snapshotId"])
+        self.assertRegex(sid, r"^\d{8}T\d{6}[+-]\d{4}-[0-9a-f]{12}$")
+
+    def test_sample_policy_reflects_truncation(self):
+        """截断标志必须如实反映「随包条数 < 全库条数」。"""
+        cut = self._build(probes_limit=2)["meta"]["samplePolicy"]
+        self.assertEqual(cut, {"recentProbeLimit": 2, "historyIsTruncated": True})
+        full = self._build(probes_limit=50)["meta"]["samplePolicy"]
+        self.assertEqual(full, {"recentProbeLimit": 50, "historyIsTruncated": False})
+
+    # ---------- 新鲜度判定 ----------
+    def test_freshness_thresholds(self):
+        """90 / 180 分钟两档；未来时间戳与坏值都不许炸。"""
+        f = public_snapshot.freshness_of
+        base = datetime(2026, 11, 24, 14, 0, 0)
+        stamp = "2026-11-24 14:00:00"
+        self.assertEqual(f(stamp, now=base), "fresh")
+        self.assertEqual(f(stamp, now=base + timedelta(minutes=89)), "fresh")
+        self.assertEqual(f(stamp, now=base + timedelta(minutes=91)), "stale")
+        self.assertEqual(f(stamp, now=base + timedelta(minutes=181)), "expired")
+        self.assertEqual(f(stamp, now=base - timedelta(minutes=10)), "fresh")
+        self.assertEqual(f(None), "unknown")
+        self.assertEqual(f("not-a-timestamp"), "unknown")
+
     # ---------- 全历史 vs 窗口 ----------
     def test_alltime_counts_full_history_not_window(self):
         """远古记录（2020 年）必须计入 allTime，证明它不是 720 小时窗口。"""
         snap = self._build(probes_limit=50)
-        at = snap["data"]["allTime"]
+        at = snap["overview"]["allTime"]
         # 种子共 5 条探测（3 新鲜 L2 + 1 L0 + 1 远古 L2）
         self.assertEqual(at["totalProbes"], 5)
         self.assertEqual(at["daily"][0]["date"], "2020-01-01")
-        self.assertEqual(snap["data"]["probes"]["total"], 5)
+        self.assertEqual(snap["probes"]["total"], 5)
 
     def test_probes_limit_respected_but_total_is_real(self):
         snap = self._build(probes_limit=2)
-        self.assertEqual(len(snap["data"]["probes"]["items"]), 2)
-        self.assertEqual(snap["data"]["probes"]["total"], 5)
+        self.assertEqual(len(snap["probes"]["items"]), 2)
+        self.assertEqual(snap["probes"]["total"], 5)
+
+    def test_data_as_of_is_max_probe_time_not_now(self):
+        """数据时点必须来自探测记录，而非导出时刻（否则会高估新鲜度）。"""
+        snap = self._build(probes_limit=50)
+        conn = self._conn()
+        try:
+            expected = conn.execute("SELECT MAX(created_at) FROM probe_result").fetchone()[0]
+        finally:
+            conn.close()
+        self.assertEqual(snap["meta"]["dataAsOf"], expected)
 
     # ---------- 无副作用 ----------
     def test_never_calls_reminders(self):
@@ -218,7 +304,7 @@ class PublicSnapshotTest(unittest.TestCase):
         with mock.patch.object(api, "reminders",
                                side_effect=AssertionError("public export must not call reminders")):
             snap = self._build(probes_limit=5)
-            self.assertNotIn("reminders", snap["data"])
+            self.assertNotIn("reminders", snap)
             self.assertEqual(scan_payload(snap), [])
 
     def test_never_calls_notify_transitions(self):
@@ -228,14 +314,14 @@ class PublicSnapshotTest(unittest.TestCase):
 
     # ---------- canary 本身会拦 ----------
     def test_scan_flags_secret_like_content(self):
-        findings = scan_payload({"data": {"x": "sk-abcdefghijklmnop",
-                                          "p": r"C:\Users\ariesfun\hub.db"}})
+        findings = scan_payload({"x": "sk-abcdefghijklmnop",
+                                 "p": r"C:\Users\ariesfun\hub.db"})
         rules = {f["rule"] for f in findings}
         self.assertIn("key_prefix", rules)
         self.assertIn("win_path", rules)
 
     def test_scan_flags_forbidden_key(self):
-        findings = scan_payload({"data": {"endpoints": {"items": [{"authEnv": "X"}]}}})
+        findings = scan_payload({"endpoints": {"items": [{"authEnv": "X"}]}})
         self.assertEqual(findings[0]["rule"], "forbidden_key")
         self.assertEqual(findings[0]["match"], "authEnv")
 
@@ -251,7 +337,8 @@ class PublicSnapshotTest(unittest.TestCase):
         self.assertGreater(info["raw_bytes"], 0)
         self.assertLess(info["gzip_bytes"], info["raw_bytes"])
         loaded = json.loads((out / "snapshot.json").read_text(encoding="utf-8"))
-        self.assertTrue(loaded["readOnly"])
+        self.assertEqual(loaded["schemaVersion"], 1)
+        self.assertIn("snapshotId", loaded["meta"])
         # 临时文件不应残留（原子替换）
         self.assertFalse((out / "snapshot.json.tmp").exists())
 

@@ -17,17 +17,31 @@
 
 ## 1. 顶层数据契约
 
-公开快照是**独立数据契约**，不复用管理 API 的响应形状：
+公开快照是**独立数据契约**，不复用管理 API 的响应形状。**扁平结构**（不套 `data.*`）：
 
 | 键 | 含义 |
 |---|---|
-| `generatedAt` | 快照生成时刻（本机时间，北京时间） |
-| `dataAsOf` | 数据时点 = 库中最新一条探测记录的 `created_at`，与 `generatedAt` **分开** |
-| `schema` | 数据契约版本号（当前 `1`） |
-| `readOnly` | 恒为 `true` |
-| `mode` | 恒为 `"public"`（与只读快照 `"readonly"` 区分） |
-| `windows` | 采用的 overview 窗口列表（见 §4） |
-| `data` | 白名单数据体（见 §2） |
+| `schemaVersion` | 数据契约版本号（当前 `1`）。公开结构发生**不兼容**变化时递增 |
+| `meta` | 自述块（快照标识 / 时间 / 口径 / 截断说明，见 §2.8） |
+| `overview` | 状态总览，键为窗口小时数（`"1"`…`"720"`）**外加 `"allTime"`**（见 §2.4 / §2.5） |
+| `rankings` | 榜单，键为场景（`speed` / `agent` / `stable`，见 §2.3） |
+| `endpoints` | 被监控的接口清单（见 §2.1） |
+| `probes` | 最近探测明细（上限 500 条，见 §2.2） |
+| `catalog` | 服务商门槛台账（见 §2.6） |
+
+**为什么是扁平的：** 公开站走**独立前端**（`web/public/`），不与管理端 `app.js` 共用取数
+路径，所以「嵌套成 `window.SNAPSHOT` 的形状以便复用」这个前提不成立；`readOnly` / `mode`
+是**管理端只读快照**（`hub/static_export.py`）的概念，公开契约天然只读，不该带。
+
+**两项与《Tokriva 公开静态展示站：架构设计与代码审查报告》的有意偏离：**
+
+1. 报告建议顶层键叫 `providers`。但那按「一个 provider 一个 base_url」设想；本库的
+   `provider` 表是**厂商元数据**（13 家，其中 8 家只有 catalog 条目、无被探测端点），
+   真正被探测的对象是 `endpoint`（5 个）。改名会与按厂商聚合的 `catalog` 重叠、
+   且与库内语义相悖 → **保留 `endpoints`**。报告 `PublicProvider` DTO 里真正需要公开的
+   字段已并入各项：`providerId`（公开 slug）、`publicStatus`（由 `active` 派生）。
+2. 报告把 `allTime` 单列为顶层键，并单列 `generatedAt` / `dataAsOf`。本政策把
+   `allTime` **并入 `overview`**（它与各窗口同属"总览"维度），把时间戳放进 `meta`。
 
 **时间口径：** 全栈使用运行机器的本地时间（本机 = 北京时间）。对外时间戳保持与
 `hub/db.py` 的本地时间口径一致，不做二次时区换算；非 UTC+8 机器需显式设 `TZ=Asia/Shanghai`。
@@ -50,13 +64,17 @@
 `defaultModel` / `probeCount` / `lastProbeAt` / `ttftP50`。**新增字段时照此归类，
 不要在两处混用同一种风格。**
 
-### 2.1 `data.endpoints.items[]` — 端点清单
+检查手法：`hub/tests/test_public_snapshot.py` 的用例名即归类说明
+（`test_probe_projection_*` 走 snake_case，`test_endpoint_projection_*` 走 camelCase）。
+
+### 2.1 `endpoints.items[]` — 端点清单
 
 **公开（白名单）：**
 
-`label`、`provider`、`website`、`kind`、`protocol`、`defaultModel`、
-`active`、`availability`（%）、`probeCount`、`lastProbeAt`、`ttftP50`、`tpsAvg`、
-`contextMax`、`modelCount`、`quotaSource`。
+`providerId`（公开 slug，由 `label` 派生，**不是**库内主键）、`label`、`provider`、
+`website`、`kind`、`protocol`、`defaultModel`、`active`、`publicStatus`（由 `active`
+派生 `ACTIVE` / `PAUSED`）、`availability`（%）、`probeCount`、`lastProbeAt`、
+`ttftP50`、`tpsAvg`、`contextMax`、`modelCount`、`quotaSource`。
 
 **明确排除（绝不进入公开快照）：**
 
@@ -66,12 +84,15 @@
 - `note` —— 运维备注，可能夹带内网信息；
 - `dailyBudget` / `budgetToday` / `budgetRemaining` / `budgetState` / `budgetReason`
   / `budgetEnabled` / `quotaUsedPct` —— 本机探测预算与闸门细节，属运维内部量；
-- `id` —— 内部主键，公开站用 `label` 标识；
-- `status`（= 上游 `provider.status`）—— 实测取值恒为 `UNKNOWN`，**零信息量**，
-  又不属任何公开语义；正向白名单下「没登记」即「不公开」。真实可用性由
-  `availability`（本机实测百分比）与总览给出。
+- `id` —— 内部主键，公开站用 `label` / `providerId` 标识；
+- `provider_status` / `status` —— 实测取值恒为 `UNKNOWN`，**零信息量**，又不属任何公开
+  语义；正向白名单下「没登记」即「不公开」。真实可用性由 `availability`（本机实测
+  百分比）与总览给出。
 
-### 2.2 `data.probes.items[]` — 最近探测明细（上限 500 条）
+> `providerId` 由**名字**派生（slug），不用库内主键：主键是内部信息，且重建库时会变。
+> slug 只要名字不变就稳定——名字变了本就该变。
+
+### 2.2 `probes.items[]` — 最近探测明细（上限 500 条）
 
 **公开（白名单）：** `created_at`、`endpoint`（标签）、`level`、`model_id`、
 `model_display`、`status`、`http_status`、`dns_ms`、`tcp_ms`、`tls_ms`、`ttfb_ms`、
@@ -89,31 +110,41 @@
 
 **错误展示口径：** 只允许 `error_kind` 这类**标准化分类**上屏，禁止发布任何原始响应文本。
 
-### 2.3 `data.rankings.<scene>` — 榜单
+### 2.3 `rankings.<scene>` — 榜单
 
 复用 `hub/rank.py` 的 `board()`（**单一来源**，与管理端同算法）。白名单：
-`scene`、`sceneLabel`、`weights`、`minSamples`、`items[]`、`excludedCount`、
-`excludedSummary[]`、`note`。
+`scene`、`sceneLabel`、`weights`、`minSamples`、`items[]`、`excludedSummary[]`、`note`。
 
 - `items[]` 保留：`endpoint`、`model`、`modelId`、`contextLength`、`n`、`totalProbes`、
   `score`、`ttftP50`、`tpsP50`、`totalP50`、`totalP95`、`breakdown`、`weightsUsed`、`missing`。
 - `excluded` 的**逐条明细**压成 `excludedSummary`（按「接口 × 原因」聚合），
   明细仅用于诊断，公开站不背负（体量实测：明细约占三份榜单总和的 85%）。
+- 场景集合由 `public_snapshot.SCENES` 与 `rank.SCENES` 驱动，**前端不另立枚举**。
 
-### 2.4 `data.overview.<hours>` — 状态总览
+### 2.4 `overview.<hours>` — 状态总览
 
 复用 `hub.status_engine.build_overview(conn, window_hours=...)`。该结构本就是面向
 "现在状态"的展示层，不含绝对路径与凭据明文；保留其 `matrix` / `headline` /
-`common_cause` 等字段。
+`common_cause` 等字段，但**做两处裁剪**：
 
-### 2.5 `data.allTime` — 全历史聚合（**与 overview 分开**）
+1. 剥掉 `matrix[].hasKey` —— 暴露"本机是否为某接口配置了凭据"，属运维内部信息
+   （页面上仍能从 `final=NO_KEY` 得到"未接入"结论）；
+2. 剥掉所有**「现在」派生的易变字段**（`generated_at` / `age_sec`，**递归**）——理由见 §2.9。
+
+公开页要"最后探测多久以前"，用 `meta.dataAsOf` 与 `endpoints.items[].lastProbeAt`
+在前端自行推算，不必由后端固化一个会过期的秒数。
+
+### 2.5 `overview.allTime` — 全历史聚合（**与各窗口分开算**）
 
 **不得**用 `window_hours=720`（近 30 天）冒充"全部"。全历史是独立的库级聚合：
 
 `totalProbes`、`healthy`、`availability`、`firstAt`、`lastAt`、`endpointCount`、
 `modelCount`、`byLevel{}`、`byStatus{}`、`daily[]`（按自然日聚合的序列）。
 
-### 2.6 `data.catalog.items[]` — 门槛台账
+放在 `overview` 之下（键名 `allTime`）而非顶层：它与 `"1"`…`"720"` 是同一种东西的
+不同取值，分家会让人误以为是并列的另一个集合。
+
+### 2.6 `catalog.items[]` — 门槛台账
 
 公开：`provider`、`website`、`kind`、`signup_method`、`free_form`、`rate_limits`、
 `allow_proxy`、`allow_commercial`、`source_url`、`source_type`、`verified_at`、
@@ -121,18 +152,47 @@
 `region_restricted`、`requires_review`、`probed`、`probed_models`。
 排除 `provider_id`（内部主键）。
 
-### 2.7 `data.health` — 健康投影
+### 2.7 原始 `health` **整体不导出**
 
-仅保留：`ok`、`probeRows`、`latestProbeAt`。
-**排除 `db`（数据库路径，仓库外时可能是绝对路径）与 `scheduler`（本机调度状态）。**
+报告 §5.3.7 把原始 `health` 列入"明确禁止导出集合"，本政策照办——**公开快照不含
+`health` 键**。原先想保留的 `{ok, probeRows, latestProbeAt}` 三个字段已被
+`meta.dataAsOf`（数据时点）与 `probes.total` / `overview.allTime.totalProbes`
+（条数）覆盖，再单列一个集合纯属重复。数据库路径与调度状态自然不再有机会出场。
 
-### 2.8 `data.meta`
+### 2.8 `meta` — 自述块
 
-`probeSource`（公开来源说明）、`timezone`（`Asia/Shanghai`）、`probesLimit`、
-`endpointsCount`（公开端点清单条数，与 `data.endpoints.items` 等长）、
-`modelCount`、`policyVersion`。
+| 字段 | 含义 |
+|---|---|
+| `snapshotId` | `YYYYMMDDTHHMMSS+0800-<12位指纹>`。**变更令牌**，见 §2.9 |
+| `generatedAt` | 快照**生成**时刻（本机时间）；仅用于诊断"这是哪一次运行" |
+| `dataAsOf` | **数据时点** = 库中最新一条探测记录的 `created_at`。刻意不取生成时刻 |
+| `timezone` | 恒为 `Asia/Shanghai` |
+| `measurementScope` | 恒为 `single-origin-network`：数据来自**一条固定出口**，不代表全球网络 |
+| `freshness` | 由 `dataAsOf` 与当下推算：`fresh` / `stale` / `expired` / `unknown` |
+| `samplePolicy` | `{recentProbeLimit, historyIsTruncated}`：明确探测列表是**截断后的样本** |
+| `policyVersion` | 本政策版本（当前 `1`），与 `schemaVersion` 分开演进 |
+| `probeSource` | 公开来源说明（"tokriva 本机探测（出口固定，历史可比）"） |
+| `windows` | overview 采用的小时窗口列表（见 §4） |
+| `endpointsCount` | 公开端点清单条数（与 `endpoints.items` 等长） |
+| `modelCount` | 活跃对话模型数 |
 
-> 采用的 overview 窗口列表只在**顶层** `windows`（§1）出现一次，`meta` 内不再重复。
+**新鲜度阈值：** `age = now - dataAsOf`；`age ≤ 90min` → `fresh`；`≤ 180min` →
+`stale`；否则 `expired`。时间戳缺失/不可解析 → `unknown`（**不猜**）；未来时间戳
+（`age < 0`，可能因时钟回拨）→ `fresh`。
+
+### 2.9 幂等与快照指纹（"无变化不提交"的依据）
+
+报告 §7.3 第 8 条要求构建**幂等**：输入库内容不变时，公开数据内容应保持一致。
+本实现给出可执行的定义：
+
+- **数据体**（`overview` / `rankings` / `endpoints` / `probes` / `catalog`）在库不变时
+  **逐字节一致**——因此所有"现在"派生字段必须剥掉（§2.4 第 2 条）。
+- **`snapshotId` = 数据时点戳 + 本机时区偏移 + 数据体 sha256 前 12 位**。
+  它只覆盖**数据体**，不含 `generatedAt` / `freshness` 这类每次运行都变的元信息。
+- **发布器必须以 `snapshotId` 为变更令牌**（不是文件字节、更不是 `generatedAt`）：
+  相同 → 跳过提交；不同 → 提交。这样"无变化不提交"才真正成立。
+- `meta.generatedAt` 与 `meta.freshness` 仍会随运行变化，但它们**不参与指纹**，
+  也**不构成"数据变了"**。
 
 ---
 

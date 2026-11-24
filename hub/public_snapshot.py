@@ -12,11 +12,26 @@
 设计要点
 --------
 - **正向白名单**：逐字段挑选，而不是对管理接口结果做减法。上游新增字段默认不公开。
+- **扁平契约**：顶层直接是 `schemaVersion` / `meta` / `overview` / `rankings` /
+  `endpoints` / `probes` / `catalog`，**不套 `data.*`**。理由：公开站走独立前端
+  （`web/public/`），不与管理端 `app.js` 共用取数路径，所以「嵌套成 `window.SNAPSHOT`
+  的形状以便复用」这个前提不成立；`readOnly` / `mode` 那些是**管理端只读快照**的概念，
+  公开契约天然只读，不该带。
+
+  ⚠️ **有意偏离架构报告的 `providers` 命名**：报告建议顶层键叫 `providers`，但那是
+  它按「一个 provider 一个 base_url」设想的名字。本库的 `provider` 表是**厂商元数据**
+  （13 家，其中 8 家只有 catalog 条目、没有任何被探测端点），真正被探测的对象是
+  `endpoint`（5 个）。若把 `endpoints` 改名 `providers`，会与按厂商聚合的 `catalog`
+  重叠、且与库内语义相悖。故**保留 `endpoints`**；报告 `PublicProvider` DTO 里
+  真正需要的公开状态，已并入 `endpoints` 各项（`providerId` slug / `publicStatus`）。
+- **自述字段**：`meta` 里带 `snapshotId` / `measurementScope` / `freshness` /
+  `samplePolicy`，让访客一眼知道「这是哪一次快照、测的是一条出口、
+  数据新不新、探测列表是被截断的样本」。
 - **纯读取、无副作用**：绝不调用 `/api/reminders`（会触发 `_notify_transitions()`），
   不写库、不触发探测。所有查询在**传入的连接**上完成（便于对一致性备份副本取数）。
 - **单一来源**：榜单复用 `hub.rank.board()`，总览复用 `hub.status_engine.build_overview()`，
   与页面/网关口径完全一致。
-- **全历史与窗口分开**：`allTime` 是库级全量聚合，**不得**用 720 小时冒充。
+- **全历史与窗口分开**：`overview.allTime` 是库级全量聚合，**不得**用 720 小时冒充。
 - **原子落盘**：先写临时文件再 `replace`，避免半个 JSON。
 
 用法
@@ -31,6 +46,7 @@ from __future__ import annotations
 
 import argparse
 import gzip
+import hashlib
 import json
 import re
 import statistics
@@ -47,11 +63,16 @@ ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_OUT = ROOT / "dist" / "public"
 DEFAULT_DB = ROOT / "data" / "hub.db"
 
-SCHEMA = 1
+SCHEMA_VERSION = 1
 POLICY_VERSION = 1
 DEFAULT_PROBES = 500
 WINDOWS = (1, 6, 24, 168, 720)   # 近 1h / 6h / 24h / 7d / 30d
 SCENES = ("speed", "agent", "stable")
+
+# 数据新鲜度阈值（分钟），见政策 §2.9 / 报告 §16.2
+FRESH_MIN, STALE_MIN = 90, 180
+# 公开的测量范围声明：只代表**一条固定出口**的体验，不代表全球网络
+MEASUREMENT_SCOPE = "single-origin-network"
 
 # provider 内部名 -> 公开别名（留空即原名公开；需要匿名化时在此登记）
 PROVIDER_ALIAS: dict[str, str] = {}
@@ -64,8 +85,74 @@ def public_provider(name: str | None) -> str | None:
     return PROVIDER_ALIAS.get(name, name)
 
 
+def public_id(name: str | None) -> str | None:
+    """稳定公开 ID（slug）：由公开名派生，前端可作锚点 / DOM id / 路由片段。
+
+    **不用库内主键**——主键是内部信息，且重建库时会变。slug 由名字派生，
+    只要名字不变就稳定；名字变了本就该变。
+    """
+    if not name:
+        return None
+    slug = re.sub(r"[^0-9a-z]+", "-", name.strip().lower()).strip("-")
+    return slug or None
+
+
 def _n(v: Any, nd: int = 3) -> Any:
     return None if v is None else round(float(v), nd)
+
+
+# ---------------------------------------------------------------------------
+# 自述字段：新鲜度 / 快照指纹 / 本地时区偏移
+# ---------------------------------------------------------------------------
+def freshness_of(data_as_of: str | None, now: datetime | None = None) -> str:
+    """按「数据时点」与「当前时间」的差给一个公开状态：fresh / stale / expired。
+
+    阈值见模块常量 `FRESH_MIN` / `STALE_MIN`（90 / 180 分钟）。时区口径与全栈一致：
+    两者都是本机本地时间（库内默认值即 `datetime('now','localtime')`），故直接相减。
+    时间戳缺失或解析失败返回 `unknown`——**不猜**，让访客自己看 `dataAsOf`。
+    """
+    if not data_as_of:
+        return "unknown"
+    try:
+        t = datetime.fromisoformat(str(data_as_of))
+    except ValueError:
+        return "unknown"
+    if t.tzinfo is None:
+        base = now or datetime.now()          # 库内时间戳无时区，按本地时间直减
+    else:
+        base = now or datetime.now().astimezone()
+    age_min = (base - t).total_seconds() / 60
+    if age_min <= FRESH_MIN:      # 含未来时间戳（负数）——宁可说 fresh 也不谎报过期
+        return "fresh"
+    if age_min <= STALE_MIN:
+        return "stale"
+    return "expired"
+
+
+def snapshot_digest(payload: Any) -> str:
+    """数据体指纹（sha256 前 12 位十六进制）。
+
+    只覆盖**数据**（overview / rankings / endpoints / probes / catalog），
+    不含 `generatedAt` / `freshness` 这类每次都变的元信息。
+    因此「库没变 → 指纹不变」，发布器可据此实现「无变化不提交」。
+    """
+    body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()[:12]
+
+
+def _local_offset(now: datetime | None = None) -> str:
+    """本机时区偏移，形如 `+0800`。本栈固定用运行机器的本地时区。"""
+    return (now or datetime.now()).astimezone().strftime("%z")
+
+
+def _stamp(text: str | None) -> str | None:
+    """`2026-11-24 12:00:00` → `20261124T120000`（snapshotId 的时间段）。"""
+    if not text:
+        return None
+    digits = re.sub(r"[^0-9]", "", str(text))
+    if len(digits) < 14:
+        return None
+    return f"{digits[:8]}T{digits[8:14]}"
 
 
 # ---------------------------------------------------------------------------
@@ -110,6 +197,27 @@ def _walk_keys(obj: Any, path: str = "$") -> Iterable[tuple[str, str]]:
     elif isinstance(obj, list):
         for i, v in enumerate(obj):
             yield from _walk_keys(v, f"{path}[{i}]")
+
+
+# 「现在」派生的易变键名：`build_overview` 会在多层塞入 `generated_at`，
+# 并在端点行/模型行塞入 `age_sec`。它们每次构建都不同，会破坏产物幂等
+# （报告 §7.3 第 8 条），进而让「无变化不提交」永远判定为「有变化」。
+# 公开页要「多久以前」，用 `meta.dataAsOf` / `endpoints[].lastProbeAt` 在前端推算即可。
+VOLATILE_KEYS = frozenset({"generated_at", "age_sec"})
+
+
+def drop_volatile(obj: Any) -> Any:
+    """递归剥掉「现在」派生字段（见 `VOLATILE_KEYS`）。原地改并返回。"""
+    if isinstance(obj, dict):
+        for k in list(obj):
+            if k in VOLATILE_KEYS:
+                del obj[k]
+            else:
+                drop_volatile(obj[k])
+    elif isinstance(obj, list):
+        for v in obj:
+            drop_volatile(v)
+    return obj
 
 
 def scan_payload(payload: Any) -> list[dict[str, str]]:
@@ -216,6 +324,9 @@ def _endpoints(conn) -> dict:
             f"SELECT source FROM quota_snapshot WHERE endpoint_id=? "
             f"AND {_qr.DISPLAY_ROW_SQL} ORDER BY id DESC LIMIT 1", (r["id"],)).fetchone()
         out.append({
+            # 公开稳定 ID：由 label 派生的 slug，供前端做 DOM id / 锚点 / 路由。
+            # **不用库内主键**（内部信息，重建库时会变）。见 `public_id()`。
+            "providerId": public_id(r["label"]),
             "label": r["label"],
             "provider": public_provider(r["provider"]),
             "website": r["website"],
@@ -223,8 +334,9 @@ def _endpoints(conn) -> dict:
             "protocol": r["protocol"],
             "defaultModel": (dm["display_name"] if dm and dm["display_name"] else r["default_model"]),
             "active": bool(r["active"]),
-            # provider_status 不公开：实测取值恒为 'UNKNOWN'（零信息量），
-            # 不在政策白名单内，前端也不消费。正向白名单下"没登记"即"不公开"。
+            # publicStatus：只由 `active` 派生（ACTIVE / PAUSED），是**可核实的内部事实**。
+            # 不用 provider.provider_status —— 实测取值恒为 'UNKNOWN'（零信息量）。
+            "publicStatus": "ACTIVE" if r["active"] else "PAUSED",
             "availability": round(stats["healthy"] / stats["n"] * 100, 1) if stats["n"] else 0.0,
             "probeCount": stats["n"],
             "lastProbeAt": stats["last_at"],
@@ -279,14 +391,21 @@ def _catalog(conn) -> dict:
 
 
 def _overview(conn, hours: int) -> dict:
-    """状态总览。剥掉矩阵里的 `hasKey`：它暴露"本机是否为某接口配置了凭据"，
-    属运维内部信息（页面上仍能从 final=NO_KEY 得到"未接入"结论）。"""
+    """状态总览。做两件事：剥掉 `hasKey`，以及剥掉所有「现在」派生的易变字段。
+
+    ① `hasKey` 暴露「本机是否为某接口配置了凭据」，属运维内部信息
+       （页面上仍能从 `final=NO_KEY` 得到「未接入」结论）。
+    ② 所有「现在」派生的易变字段（`generated_at` / `age_sec`，见 `drop_volatile`）
+       会让「库没变 → 产物不变」失效（报告 §7.3 第 8 条要求构建幂等）。
+       公开页要「最后探测多久以前」，可用 `meta.dataAsOf` 与
+       `endpoints.items[].lastProbeAt` 在前端自行推算，不必由后端固化一个会过期的秒数。
+    """
     from .status_engine import build_overview
     ov = build_overview(conn, window_hours=hours)
     for m in ov.get("matrix", []) or []:
         if isinstance(m, dict):
             m.pop("hasKey", None)
-    return ov
+    return drop_volatile(ov)
 
 
 def _alltime(conn) -> dict:
@@ -324,11 +443,19 @@ def _alltime(conn) -> dict:
     }
 
 
-def _health(conn) -> dict:
-    """健康投影：**不含**数据库路径与本机调度状态。"""
-    n = conn.execute("SELECT COUNT(*) FROM probe_result").fetchone()[0]
-    latest = conn.execute("SELECT MAX(created_at) FROM probe_result").fetchone()[0]
-    return {"ok": True, "probeRows": n, "latestProbeAt": latest}
+def probes_as_of(conn) -> str | None:
+    """**数据时点**：有效探测记录的最大采集时间。
+
+    刻意**不**取导出时刻——导出可能在探测之间发生（甚至手工补跑），
+    用「机器什么时候打包」冒充「数据到哪儿了」会高估新鲜度。
+    """
+    return conn.execute("SELECT MAX(created_at) FROM probe_result").fetchone()[0]
+
+
+# 注：原始 `health` **整体不导出**（政策 §2.7 / 报告 §5.3.7）。原先设想的
+# `{ok, probeRows, latestProbeAt}` 三字段已被 `meta.dataAsOf`（数据时点）与
+# `probes.total` / `overview.allTime.totalProbes`（条数）覆盖，故不再保留该函数——
+# 留着空壳只会让人以为「health 是要导出的，只是这次没调」。
 
 
 def _rankings(conn, scene: str) -> dict:
@@ -339,17 +466,29 @@ def _rankings(conn, scene: str) -> dict:
     return _summarize_excluded(payload)   # excluded 明细 -> 聚合摘要
 
 
-def _meta(conn, probes_limit: int) -> dict:
-    """契约元信息。窗口列表只放**顶层** `windows`（§1），此处不再重复。
+def _meta(conn, probes: dict, windows: list[int], *, generated_at: str,
+          snapshot_id: str, data_as_of: str | None) -> dict:
+    """契约元信息（自述块）。字段清单见 `docs/public-data-policy.md` §2.8。
 
-    `endpointsCount` = 公开端点清单条数（与 `data.endpoints.items` 等长），
-    供公开页写"共监控 N 个接口"之类的话术；细化到活跃/在线的口径由总览给出。
+    `endpointsCount` = 公开端点清单条数（与 `endpoints.items` 等长），
+    供公开页写「共监控 N 个接口」之类的话术；活跃/在线的细化口径由总览给出。
+    `windows` 放在这里（而非顶层）是为了让「契约长什么样」集中一处；
+    它与 `overview` 的数值键同源，因此不会漂移。
     """
     return {
-        "probeSource": "tokriva 本机探测（出口固定，历史可比）",
+        "snapshotId": snapshot_id,
+        "generatedAt": generated_at,
+        "dataAsOf": data_as_of,
         "timezone": "Asia/Shanghai",
+        "measurementScope": MEASUREMENT_SCOPE,
+        "freshness": freshness_of(data_as_of),
+        "samplePolicy": {
+            "recentProbeLimit": probes["limit"],
+            "historyIsTruncated": probes["total"] > probes["limit"],
+        },
         "policyVersion": POLICY_VERSION,
-        "probesLimit": probes_limit,
+        "probeSource": "tokriva 本机探测（出口固定，历史可比）",
+        "windows": list(windows),
         "endpointsCount": conn.execute("SELECT COUNT(*) FROM endpoint").fetchone()[0],
         "modelCount": conn.execute(
             "SELECT COUNT(DISTINCT model_id) FROM model "
@@ -361,27 +500,40 @@ def _meta(conn, probes_limit: int) -> dict:
 # 组装与落盘
 # ---------------------------------------------------------------------------
 def build_public(conn, probes_limit: int = DEFAULT_PROBES,
-                 windows: Iterable[int] = WINDOWS) -> dict[str, Any]:
-    """在给定连接上构建公开快照（纯读取，无副作用）。"""
+                 windows: Iterable[int] = WINDOWS,
+                 now: datetime | None = None) -> dict[str, Any]:
+    """在给定连接上构建公开快照（纯读取，无副作用）。
+
+    返回**扁平**契约：`schemaVersion` + `meta` / `overview` / `rankings` /
+    `endpoints` / `probes` / `catalog`。`allTime` 并入 `overview.allTime`——
+    它与各窗口同为一个「总览」维度的取值，分家会让人以为它是另一个集合。
+
+    顺序很关键：先算出**数据**（不含任何时间戳），再据此算指纹 `snapshotId`，
+    最后才拼 `meta`。这样「库没变 → 指纹不变」，发布器可据此跳过无变化的提交。
+    """
     windows = list(windows)
+    probes = _probes(conn, probes_limit)
     data: dict[str, Any] = {
-        "meta": _meta(conn, probes_limit),
-        "health": _health(conn),
-        "endpoints": _endpoints(conn),
-        "probes": _probes(conn, probes_limit),
-        "catalog": _catalog(conn),
-        "rankings": {s: _rankings(conn, s) for s in SCENES},
         "overview": {str(h): _overview(conn, h) for h in windows},
-        "allTime": _alltime(conn),
+        "rankings": {s: _rankings(conn, s) for s in SCENES},
+        "endpoints": _endpoints(conn),
+        "probes": probes,
+        "catalog": _catalog(conn),
     }
+    data["overview"]["allTime"] = _alltime(conn)
+
+    now = now or datetime.now()
+    generated_at = now.isoformat(timespec="seconds")
+    data_as_of = probes_as_of(conn)
+    digest = snapshot_digest(data)
+    stamp = _stamp(data_as_of) or _stamp(generated_at)
+    snapshot_id = f"{stamp}{_local_offset(now)}-{digest}"
+
     return {
-        "generatedAt": datetime.now().isoformat(timespec="seconds"),
-        "dataAsOf": data["health"]["latestProbeAt"],
-        "schema": SCHEMA,
-        "readOnly": True,
-        "mode": "public",
-        "windows": windows,
-        "data": data,
+        "schemaVersion": SCHEMA_VERSION,
+        "meta": _meta(conn, probes, windows, generated_at=generated_at,
+                      snapshot_id=snapshot_id, data_as_of=data_as_of),
+        **data,
     }
 
 
@@ -440,7 +592,6 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  … 另有 {len(findings) - 25} 项", file=sys.stderr)
         return 2
 
-    data = snapshot["data"]
     if args.scan_only:
         print(f"敏感扫描通过（{len(json.dumps(snapshot))} 字符未命中黑名单）。")
         return 0
@@ -448,19 +599,24 @@ def main(argv: list[str] | None = None) -> int:
     info = write_snapshot(snapshot, args.out)
     raw, gz = info["raw_bytes"], info["gzip_bytes"]
     if args.quiet:
-        print(f"{info['path']}  {raw:,} B / gzip {gz:,} B")
+        print(f"{info['path']}  {raw:,} B / gzip {gz:,} B  {snapshot['meta']['snapshotId']}")
     else:
-        ranks = data["rankings"]
+        meta, ranks = snapshot["meta"], snapshot["rankings"]
         print(f"已生成公开快照 {info['path']}")
-        print(f"  生成时间  {snapshot['generatedAt']}   数据时点  {snapshot['dataAsOf']}")
-        print(f"  探测明细  {data['probes']['total']} 条（随包 {len(data['probes']['items'])} 条）")
-        print(f"  全历史    {data['allTime']['totalProbes']} 条 / 可用率 {data['allTime']['availability']}%")
+        print(f"  快照 ID   {meta['snapshotId']}")
+        print(f"  生成时间  {meta['generatedAt']}   数据时点  {meta['dataAsOf']}"
+              f"   新鲜度 {meta['freshness']}")
+        print(f"  探测明细  {snapshot['probes']['total']} 条"
+              f"（随包 {len(snapshot['probes']['items'])} 条"
+              f" / 截断 {meta['samplePolicy']['historyIsTruncated']}）")
+        print(f"  全历史    {snapshot['overview']['allTime']['totalProbes']} 条"
+              f" / 可用率 {snapshot['overview']['allTime']['availability']}%")
         print(f"  榜单      " + "  ".join(
             f"{s}:{len(ranks[s]['items'])} 项" for s in SCENES))
-        print(f"  端点      {len(data['endpoints']['items'])} 个"
-              f"   门槛 {len(data['catalog']['items'])} 家")
+        print(f"  端点      {len(snapshot['endpoints']['items'])} 个"
+              f"   门槛 {len(snapshot['catalog']['items'])} 家")
         print(f"  窗口      " + "、".join(f"近 {w}h" if w < 168 else f"近 {w // 24}天"
-                                          for w in snapshot["windows"]))
+                                          for w in meta["windows"]))
         print(f"  体量      {raw:,} B（未压缩） / {gz:,} B（gzip）")
     return 0
 
