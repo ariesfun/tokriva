@@ -235,6 +235,54 @@ def connect_ro(db_path: str | Path) -> sqlite3.Connection:
         return connect(p)
 
 
+def _open_for_backup(src_path: Path) -> sqlite3.Connection:
+    """备份专用源连接：优先只读 URI，失败退回**裸连接**（只读使用，绝不迁移）。
+
+    刻意不走 `connect()`：那条路会 `executescript(SCHEMA)` + `migrate()`，
+    对源库产生 DDL/DML 副作用——为了生成一份只读副本而改写被备份的库，说不通。
+    """
+    try:
+        conn = sqlite3.connect(f"file:{src_path.as_posix()}?mode=ro", uri=True)
+        conn.execute("SELECT COUNT(*) FROM sqlite_master").fetchone()
+        return conn
+    except sqlite3.Error:
+        return sqlite3.connect(str(src_path))
+
+
+def consistent_copy(src: str | Path, dst: str | Path) -> Path:
+    """用 **SQLite Online Backup API** 把库复制成一致性副本（WAL 安全），返回副本路径。
+
+    为什么不能用 `cp` / `shutil.copy`：库开着 WAL，已提交但尚未 checkpoint 的页还在
+    `-wal` 里；单拷主文件会**漏掉这部分数据**，得到一份「旧且可能不自洽」的副本
+    （`-wal` / `-shm` 一起拷虽可缓解，但拷三件套的过程本身不是原子的）。
+
+    为什么导出要副本：一整份公开快照要跑**多次查询**（总览、榜单、接口、探测明细）。
+    直接读活动库时，每次查询各自取「当时最新」的视图——而探测是**独立进程**每 30 分钟
+    在写，跨查询之间库可能已经变了，于是同一个包里的「榜单可用率」与「接口明细」
+    可能来自不同时刻，整包不自洽。副本把这一刻**冻结成单一视图**，导出的整包因此自洽。
+
+    与 `connect_ro` 的分工：`connect_ro` 是「只读打开活动库」，适合零散单查；
+    本函数产出**独立文件**，适合「一批查询、结果必须互相自洽」的导出。
+    副本落成 rollback journal 单文件，读侧不再依赖 `-wal` / `-shm`。
+    """
+    src_path, dst_path = Path(src), Path(dst)
+    dst_path.parent.mkdir(parents=True, exist_ok=True)
+    if dst_path.exists():
+        dst_path.unlink()
+    source = _open_for_backup(src_path)
+    try:
+        target = sqlite3.connect(str(dst_path))
+        try:
+            source.backup(target)
+            # 落成单文件（rollback journal）：副本自带全部数据，读侧无需伴随文件。
+            target.execute("PRAGMA journal_mode=DELETE")
+        finally:
+            target.close()
+    finally:
+        source.close()
+    return dst_path
+
+
 def seed_endpoints(conn: sqlite3.Connection, endpoints: list[dict]) -> None:
     """幂等写入 provider + endpoint。"""
     for ep in endpoints:

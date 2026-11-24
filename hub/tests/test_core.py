@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import shutil
 import sqlite3
 import sys
 import tempfile
@@ -447,6 +448,99 @@ class TestDb(unittest.TestCase):
             self.assertEqual(len(rows), 1, "重复 seed 不应产生多行")
             self.assertEqual(rows[0]["base_url"], "http://b/v1")
             c.close()
+
+
+class TestConsistentCopy(unittest.TestCase):
+    """`db.consistent_copy`：SQLite Online Backup 一致性副本（发布安全 P0）。
+
+    为什么要有它：库开着 WAL，已提交但尚未 checkpoint 的页只在 `-wal` 里，
+    **单拷主文件会漏数据**（实测真实库少 19 行）。公开导出要在一份数据上跑多次
+    查询（总览/榜单/接口/明细），必须先把这一刻冻结成自足单文件，整包才自洽。
+    """
+
+    def _seed_live(self, path: Path) -> sqlite3.Connection:
+        """建库并写入若干行，**保持连接打开**（WAL 才不会顺手被 checkpoint 掉）。"""
+        conn = db.connect(path)
+        db.seed_endpoints(conn, [{"provider": "P", "label": "L",
+                                  "base_url": "http://a/v1",
+                                  "protocol": "openai_chat", "auth_env": "K"}])
+        ep = conn.execute("SELECT id FROM endpoint").fetchone()["id"]
+        for i in range(40):
+            conn.execute(
+                "INSERT INTO probe_result(endpoint_id,model_id,level,status,total_ms,"
+                "response_shape,created_at) "
+                "VALUES(?,?,?,?,?,?,datetime('now','localtime'))",
+                (ep, None, "L0", "HEALTHY", 100 + i, "json"))
+        conn.commit()
+        return conn
+
+    @staticmethod
+    def _count_ro(path: Path, table: str = "probe_result"):
+        """只读统计行数；打不开或没这张表都返回 None（裸拷主文件常常如此）。"""
+        try:
+            c = sqlite3.connect(f"file:{Path(path).as_posix()}?mode=ro", uri=True)
+        except sqlite3.Error:
+            return None
+        try:
+            return c.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+        except sqlite3.Error:
+            return None
+        finally:
+            c.close()
+
+    def test_copy_matches_source_and_includes_wal(self):
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            src = d / "live.db"
+            conn = self._seed_live(src)
+            try:
+                live = conn.execute("SELECT COUNT(*) FROM probe_result").fetchone()[0]
+                self.assertTrue(src.with_name(src.name + "-wal").is_file(),
+                                "本用例前提：数据攒在 -wal 里（连接未关）")
+
+                plain = d / "plain.db"          # 模拟 `cp`：只拷主文件
+                shutil.copy2(src, plain)
+                copy = db.consistent_copy(src, d / "sub" / "copy.db")
+
+                self.assertEqual(self._count_ro(copy), live,
+                                 "副本必须含只存在于 -wal 的已提交数据")
+                self.assertNotEqual(self._count_ro(plain), live,
+                                    "前提校验：裸拷主文件本就该读不全")
+            finally:
+                conn.close()
+
+    def test_copy_is_self_contained_single_file(self):
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            src = d / "live.db"
+            self._seed_live(src).close()        # 关闭即 checkpoint
+            copy = db.consistent_copy(src, d / "copy.db")
+
+            self.assertTrue(copy.is_file())
+            self.assertFalse(copy.with_name(copy.name + "-wal").exists(),
+                             "副本不该依赖 -wal")
+            self.assertFalse(copy.with_name(copy.name + "-shm").exists(),
+                             "副本不该依赖 -shm")
+            c = sqlite3.connect(f"file:{copy.as_posix()}?mode=ro", uri=True)
+            try:
+                self.assertEqual(
+                    c.execute("PRAGMA journal_mode").fetchone()[0].lower(), "delete",
+                    "副本应落成单文件 rollback journal")
+                self.assertGreater(
+                    c.execute("SELECT COUNT(*) FROM probe_result").fetchone()[0], 0)
+            finally:
+                c.close()
+
+    def test_copy_replaces_stale_target(self):
+        """同名旧副本必须被覆盖，不能把上次的残留读成「本次结果」。"""
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            src = d / "live.db"
+            self._seed_live(src).close()
+            dst = d / "copy.db"
+            dst.write_bytes(b"not a database at all")
+            copy = db.consistent_copy(src, dst)
+            self.assertEqual(self._count_ro(copy, "endpoint"), 1)
 
 
 class RateLimitRetagMigration(unittest.TestCase):
