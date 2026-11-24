@@ -1045,6 +1045,24 @@ class _FakeScheduler:
         self.calls.append((trigger, kw))
 
 
+def _frozen_now(instant: datetime):
+    """把 `hub.api` 里的 `datetime.now()` 钉死在 `instant`。
+
+    为什么必须钉：定时探测的判据是拿「现在」跟**墙上时钟对齐**的网格点比，
+    于是同一组固定输入（例如「数据 1 分钟前刚探过」）会随运行时刻得出不同结论——
+    刚过 :00/:30 时下次网格点在整整 30 分钟之后，这 1 分钟的新鲜度就会被判成
+    「到那时已超期」。不钉时钟测的就是运气：约每 15 次运行红一次
+    （2026-11-24 CI 正是在只改 README 的提交上这样挂掉的）。
+    """
+
+    class _FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return instant
+
+    return mock.patch.object(api, "datetime", _FrozenDatetime)
+
+
 class ScheduleGridTest(unittest.TestCase):
     """定时探测的「墙上时钟对齐」与「启动补跑」。
 
@@ -1074,9 +1092,15 @@ class ScheduleGridTest(unittest.TestCase):
             self.assertEqual(got.second, 0)
 
     def test_schedule_arm_is_wall_clock_aligned(self):
-        """装配必须显式传 next_run_time，否则重启又会把间隔重新计时。"""
+        """装配必须显式传 next_run_time，否则重启又会把间隔重新计时。
+
+        时钟钉住：`next_run_time` 由装配处的 `datetime.now()` 现算，拿真实 now
+        跟它比会在「断言恰好跨过网格点的那一瞬」翻车（窗口极窄，但确实存在）。
+        """
+        at = datetime(2026, 11, 23, 11, 7, 0)
         sched = _FakeScheduler()
-        with mock.patch.object(api, "STATE") as st:
+        with _frozen_now(at), \
+                mock.patch.object(api, "STATE") as st:
             st.scheduler = sched
             api._apply_schedule(True, 30)
         self.assertEqual(len(sched.calls), 1)
@@ -1085,32 +1109,55 @@ class ScheduleGridTest(unittest.TestCase):
         self.assertEqual(kw["id"], "probe")
         nrt = kw.get("next_run_time")
         self.assertIsInstance(nrt, datetime, "必须显式对齐，不能交给 interval 自己算")
+        self.assertEqual(nrt, datetime(2026, 11, 23, 11, 30), "从 11:07 出发应钉在 11:30")
         self.assertEqual(nrt.minute % 30, 0)
-        self.assertGreater(nrt, datetime.now())
+        self.assertGreater(nrt, at, "必须是未来时刻，否则重启即立刻探测")
 
     def test_catchup_armed_only_when_data_would_be_stale(self):
-        """补跑条件：到下次定时轮开始时，数据必然已超过一个间隔没更新。"""
-        now = datetime.now()
+        """补跑条件：到下次定时轮开始时，数据必然已超过一个间隔没更新。
 
+        三个区块都钉住时钟——判据要跟墙上时钟对齐的网格点比，用真实 now
+        会让固定输入在不同运行时刻得到不同结论（③ 就是原先随机命中的那条）。
+        """
+        # ① 离网格点还有 23 分钟：数据 1 分钟前刚探过，到下次定时轮才 24 分钟旧 → 不补
+        at = datetime(2026, 11, 23, 11, 7, 0)
         sched = _FakeScheduler()
-        with mock.patch.object(api, "STATE") as st, \
+        with _frozen_now(at), \
+                mock.patch.object(api, "STATE") as st, \
                 mock.patch.object(api, "_last_probe_at",
-                                  return_value=now - timedelta(minutes=1)):
+                                  return_value=at - timedelta(minutes=1)):
             st.scheduler = sched
             api._arm_startup_catchup(30)
         self.assertEqual(sched.calls, [], "数据还新，不该补跑（否则重启变成刷探测）")
 
+        # ② 数据 5 小时没更新：无论网格落在哪都早已超期 → 补一轮
         sched2 = _FakeScheduler()
-        with mock.patch.object(api, "STATE") as st, \
+        with _frozen_now(at), \
+                mock.patch.object(api, "STATE") as st, \
                 mock.patch.object(api, "_last_probe_at",
-                                  return_value=now - timedelta(hours=5)):
+                                  return_value=at - timedelta(hours=5)):
             st.scheduler = sched2
             api._arm_startup_catchup(30)
         self.assertEqual(len(sched2.calls), 1, "数据陈旧，应补一轮")
         trigger, kw = sched2.calls[0]
         self.assertEqual(trigger, "date")
         self.assertEqual(kw["id"], "probe_catchup")
-        self.assertGreater(kw["run_date"], now, "延后起跑，别和启动流程争资源")
+        self.assertGreater(kw["run_date"], at, "延后起跑，别和启动流程争资源")
+
+        # ③ 边界语义：刚过 :30 网格点，下次定时轮还有 30 分钟——1 分钟前探过的数据
+        #    到那时已 30 分钟未更新，按「到下次定时轮必然超期」的定义**应当**补跑。
+        #    这一条过去不是用例，只是随机命中的运气；现在把它写成明确契约，
+        #    免得后人看到这里的「1 分钟也算陈旧」以为算错了。
+        just_past = datetime(2026, 11, 24, 11, 30, 33)
+        sched3 = _FakeScheduler()
+        with _frozen_now(just_past), \
+                mock.patch.object(api, "STATE") as st, \
+                mock.patch.object(api, "_last_probe_at",
+                                  return_value=just_past - timedelta(minutes=1)):
+            st.scheduler = sched3
+            api._arm_startup_catchup(30)
+        self.assertEqual(len(sched3.calls), 1,
+                         "刚过网格点时下轮还在 30 分钟后，1 分钟前的数据届时已超期 → 应补跑")
 
     def test_no_catchup_on_empty_db_or_no_scheduler(self):
         """库为空（首次部署）或调度器不在时都不补，交给正常调度。"""
