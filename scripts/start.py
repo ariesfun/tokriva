@@ -8,7 +8,8 @@
 等价于手动执行：
     TOKRIVA_SCHEDULE=1 python -m uvicorn hub.api:app --host 127.0.0.1 --port 8766
 
-启动后写 PID 与日志路径到 data/server.pid / data/server.log，供 scripts/stop.py 关闭。
+启动后把「端口 + PID」写进 data/server.pid，日志写 data/server.log，供
+scripts/stop.py 关闭（带上端口，stop 在 PID 失效时才知道该去兜底哪个端口）。
 """
 from __future__ import annotations
 
@@ -90,6 +91,11 @@ def main() -> int:
     env["TOKRIVA_SCHEDULE"] = "0" if args.no_schedule else "1"
     env["TOKRIVA_PROBE_INTERVAL_MIN"] = str(args.interval)
 
+    # data/ 是运行期产物目录（已在 .gitignore 中）——全新克隆里并不存在。
+    # 日志与 PID 文件都落在这里，故必须先建目录，否则新环境「一键启动」即崩：
+    #   FileNotFoundError: .../data/server.log
+    # （手动 `python -m uvicorn ...` 不受影响：hub/db.py 连接时会自建该目录。）
+    (ROOT / "data").mkdir(parents=True, exist_ok=True)
     log = open(LOG_FILE, "a", encoding="utf-8")
     # DETACHED_PROCESS 让子进程真正脱离当前会话，父进程（本脚本/双击的 cmd）退出后仍常驻。
     # 配合 CREATE_NEW_PROCESS_GROUP 避免 Ctrl+C 连带到服务。
@@ -107,7 +113,9 @@ def main() -> int:
     # 等一小段确认起来了（失败则马上返回非 0）
     for _ in range(20):
         if _port_in_use(args.port):
-            PID_FILE.write_text(str(proc.pid), encoding="utf-8")
+            # 形如 "8766 44256"：stop.py 据此在 PID 失效时仍知道该兜底哪个端口。
+            # 只写 PID 的旧格式它也能解析，故外部启动器无需同步改动。
+            PID_FILE.write_text(f"{args.port} {proc.pid}", encoding="utf-8")
             print(f"[已启动] Tokriva 控制台")
             print(f"  PID     : {proc.pid}")
             print(f"  地址    : http://127.0.0.1:{args.port}/")
