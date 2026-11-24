@@ -1,5 +1,7 @@
 # Tokriva · 免费 AI 接口监控台
 
+[![CI](https://github.com/ariesfun/tokriva/actions/workflows/ci.yml/badge.svg)](https://github.com/ariesfun/tokriva/actions/workflows/ci.yml)
+
 > 实时探测各家免费 AI 算力的接口，测出真实可用率、响应速度、上下文窗口，帮你挑出「现在最值得用」的那一个。
 
 ---
