@@ -13,6 +13,10 @@ jobs:
   test:
     name: 单元与集成测试（Python 3.13）
     runs-on: ubuntu-latest
+    # 全栈时间口径＝运行机器的本地时间；CI 机器是 UTC，必须显式对齐到北京时间，
+    # 否则依赖「本机时区」的用例（如 quota_rules 的重置时刻换算）会失败。
+    env:
+      TZ: Asia/Shanghai
     steps:
       - name: Checkout
         uses: actions/checkout@v4
