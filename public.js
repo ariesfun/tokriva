@@ -179,19 +179,25 @@
   //
   // 因此新鲜度**必须**按 UTC+8 的当前时刻算，而不是访问者本机时钟——否则海外访客
   // 会看到他所在时区与北京时间相差几小时，于是「才更新过的数据」被显示成「已过期」。
+  // 时间帧约定（**整段一起改**，别只动一处）：
+  // 库里的时间戳是「北京时间墙上时间」且不带时区。为了能放进 `Date` 做减法，
+  // 统一映射到帧 B ——「把北京墙上时间当作 UTC 来写」的毫秒数：
+  //     B 满足  new Date(B).toISOString() === 北京墙上时间串
+  // 于是两个方向各有明确写法：
+  //     字符串 → B ：按 UTC 原样解析（**不加任何偏移**，串本身已是墙上时间）
+  //     当前时刻 → B ：Date.now() + 8h（**与运行机器时区无关**）
+  // 曾经两处都写反了：`parseUtc8Ts` 多加了 8h，`nowUtc8Ms` 又掺进
+  // `getTimezoneOffset()`，结果帧不一致，任何 16:00 之后的当天数据都会被算成「明天」。
   var UTC8_OFFSET_MS = 8 * 3600 * 1000;
 
   function nowUtc8Ms() {
-    var d = new Date();
-    return d.getTime() + d.getTimezoneOffset() * 60000 + UTC8_OFFSET_MS;
+    return Date.now() + UTC8_OFFSET_MS;
   }
 
   function parseUtc8Ts(ts) {
     if (!ts) return null;
-    // 末尾补 `Z` 强制按 UTC 解析，再整体 +8h → 得到「UTC+8 墙上时间对应的毫秒数」
     var d = new Date(String(ts).replace(' ', 'T') + 'Z');
-    if (isNaN(d.getTime())) return null;
-    return d.getTime() + UTC8_OFFSET_MS;
+    return isNaN(d.getTime()) ? null : d.getTime();
   }
 
   function freshnessOf(dataAsOf) {
@@ -860,13 +866,18 @@
 
   /** `2026-11-24 15:34:23` → `15:34`；跨天时补 `11-24 15:34`。 */
   function shortStamp(ts) {
-    var ms = parseUtc8Ts(ts);
-    if (ms == null) return '';
+    if (!ts) return '';
     var s = String(ts).replace('T', ' ');
     var hhmm = s.length >= 16 ? s.slice(11, 16) : '';
     if (!hhmm) return '';
-    var day = new Date(ms).toISOString().slice(0, 10);      // UTC+8 那一刻的日期
-    var today = new Date(nowUtc8Ms()).toISOString().slice(0, 10);
+    // 数据侧日期**直接从串里取**：串本身就是北京墙上时间，前 10 位就是它的日期。
+    // 不要再绕 `parseUtc8Ts` + `toISOString()`——那等于把「帧 B」当真实 epoch 解读，
+    // 会整体前移 8 小时，凡 16:00 之后的当天数据都被误判成「明天」。
+    var s = String(ts).replace('T', ' ');
+    var hhmm = s.length >= 16 ? s.slice(11, 16) : '';
+    if (!hhmm) return '';
+    var day = s.slice(0, 10);
+    var today = new Date(nowUtc8Ms()).toISOString().slice(0, 10);   // 北京的「今天」
     return day === today ? hhmm : day.slice(5) + ' ' + hhmm;
   }
 
