@@ -58,8 +58,11 @@ python -m uvicorn hub.api:app --host 127.0.0.1 --port 8766
 
 ### 前置条件
 
-- **Python 3.13**（项目依赖装在这个环境；本机另装的 3.11/3.8 供其他工具/项目用，勿混用）
+- **Python 3.13**（依赖清单见 `requirements.txt`；CI 也在 3.13 上验证）
 - 各服务商的 API Key 填在根目录 `.env`（模板见 `.env.example`，Key 只存环境变量名、不回显明文）
+- **没配 Key 也能跑**：控制台会正常打开，但接口清单为空——探针只测「已登记且配好 Key」的接口。
+  想直接验证实现，可跑离线测试：`python -m unittest discover -s hub/tests`
+  （用 `fixtures/` 里的脱敏样本，不触网、不需要 `.env`）
 
 ## 设计原则
 
