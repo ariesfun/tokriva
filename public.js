@@ -454,10 +454,18 @@
       ? '本窗口 · 另有 ' + (epCount - monitored) + ' 个未纳入观测'
       : '本窗口 · ' + (WINDOW_LABELS[win] || win);
 
+    // 全量可用率的分母是**有效探测数**（全部 − 限流 − 未接入），不是全部条数。
+    // 副标题如实标出两者，否则「可用率 x%」下面写着「全部历史 N 次探测」，
+    // 会让人拿 N 去反推百分比，跟实际分母对不上（见「方法说明」的 429 口径）。
+    var atSub = '全部历史 ' + fmtInt(allTime.totalProbes) + ' 次探测';
+    if (isNum(allTime.availabilityDenom) && allTime.availabilityDenom < allTime.totalProbes) {
+      atSub += ' · 有效 ' + fmtInt(allTime.availabilityDenom) + ' 次';
+    }
+
     var kpis =
       kpi('可用接口', okCount + ' / ' + (monitored == null ? '—' : monitored), availSub) +
       kpi('本窗口探测', winProbes ? fmtInt(winProbes) : '—', '各接口合计') +
-      kpi('全量可用率', isNum(allTime.availability) ? fmtPct(allTime.availability, 1) : '—', '全部历史 ' + fmtInt(allTime.totalProbes) + ' 次探测') +
+      kpi('全量可用率', isNum(allTime.availability) ? fmtPct(allTime.availability, 1) : '—', atSub) +
       kpi('可观测模型', isNum(meta.modelCount) ? fmtInt(meta.modelCount) : '—', '快照内模型数');
 
     var seg = '<div class="seg">' + windowOptions().map(function (k) {
@@ -560,9 +568,11 @@
   /* ================= 视图：接口与门槛 ================= */
 
   function availabilityBar(v) {
-    var level = 'ok';
-    if (isNum(v)) { if (v < 60) level = 'danger'; else if (v < 90) level = 'warn'; }
-    var pct = isNum(v) ? Math.max(0, Math.min(100, v)) : 0;
+    // 无有效样本（`availability` 为 null）时给一个中性的空条，而不是「绿色 0%」——
+    // 绿色会被读成「一切正常」，可这里其实是没有样本可算。旁边的数字同口径显示「—」。
+    if (!isNum(v)) return '<div class="bar" data-level="none"><i style="width:0%"></i></div>';
+    var level = v < 60 ? 'danger' : v < 90 ? 'warn' : 'ok';
+    var pct = Math.max(0, Math.min(100, v));
     return '<div class="bar" data-level="' + level + '"><i style="width:' + pct + '%"></i></div>';
   }
 

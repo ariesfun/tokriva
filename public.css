@@ -257,6 +257,7 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .bar > i { display: block; height: 100%; border-radius: inherit; background: var(--ok); }
 .bar[data-level="warn"] > i { background: var(--warn); }
 .bar[data-level="danger"] > i { background: var(--danger); }
+.bar[data-level="none"] > i { background: var(--ink-4); }   /* 无有效样本：中性，不冒充「正常/危险」 */
 
 /* ============ 图表 ============ */
 .chart-card { padding: 14px 16px 6px; }
